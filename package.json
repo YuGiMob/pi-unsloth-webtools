@@ -4,6 +4,11 @@
   "type": "module",
   "description": "Pi extension: web_search and web_fetch tools ported from the Unsloth Studio codebase (DuckDuckGo search, SSRF-safe direct fetching, HTML-to-Markdown extraction)",
   "main": "index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YuGiMob/pi-unsloth-webtools.git"
+  },
+  "author": "YuGiMob",
   "keywords": [
     "pi-package",
     "pi",
@@ -43,7 +48,8 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.0",
