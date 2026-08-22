@@ -15,7 +15,7 @@
     "duckduckgo",
     "ssrf"
   ],
-  "license": "MIT",
+  "license": "AGPL-3.0",
   "files": [
     "index.ts",
     "web-search.ts",
