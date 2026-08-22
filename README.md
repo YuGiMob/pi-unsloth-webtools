@@ -4,6 +4,20 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) extension providing `w
 `web_fetch` tools, ported from the Unsloth Studio codebase
 ([`unslothai/unsloth`](https://github.com/unslothai/unsloth), `studio/backend/core/inference/`).
 
+## Install
+
+```sh
+pi install npm:pi-unsloth-webtools
+```
+
+or add `npm:pi-unsloth-webtools` to the `packages` array in `~/.pi/agent/settings.json`.
+
+To install from source instead:
+
+```sh
+pi install /path/to/pi-unsloth-webtools
+```
+
 ## What it does
 
 ### web_search
@@ -38,9 +52,9 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   object streams, all filters, ToUnicode fonts, encryption detection, and a
   pymupdf4llm-style markdown layer (headings, bold/italic, code fences, links, tables)
   with Studio's corrupted/incomplete fallback to plain text.
-- Content sniffing: MIME allow/deny, binary magic signatures, PDF magic + text extraction
-  (built-in zlib-based extractor, not pymupdf-grade), charset decoding (declared charset, BOM
-  sniffing for UTF-8/16/32, cp1252 rescue for mislabeled single-byte pages).
+- Content sniffing: MIME allow/deny, binary magic signatures, PDF magic detection, and charset
+  decoding (declared charset, BOM sniffing for UTF-8/16/32, cp1252 rescue for mislabeled
+  single-byte pages).
 - HTML → Markdown conversion ported from Studio's dependency-free `_html_to_md.py`: headings,
   links, emphasis, lists, tables, blockquotes, code fences, entity decoding; hidden-element
   stripping (`hidden`, `aria-hidden`, inline styles); `<article>`/`<main>` main-content scoping
@@ -51,16 +65,8 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 - HTML entity decoding replicates CPython's `html.unescape` (full 2,231-entry HTML5 table,
   longest-prefix rule, Windows-1252 numeric mappings), matching Studio byte-for-byte.
 
-See `ROADMAP.md` for the remaining gaps (PDF extraction, TLS fingerprinting, proxies).
-
-## Install
-
-```sh
-pi install /path/to/pi-unsloth-webtools
-```
-
-or add `npm:pi-unsloth-webtools` (once published) to the `packages` array in
-`~/.pi/agent/settings.json`.
+See `ROADMAP.md` for the remaining gaps (per-line styling, table detection, TLS
+fingerprinting, proxies).
 
 ## Development
 
