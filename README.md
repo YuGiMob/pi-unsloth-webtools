@@ -34,6 +34,10 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 - Up to 5 redirect hops, each re-validated and re-resolved against the same rules.
 - 512 KiB download cap (10 MiB for PDFs), overall deadline + per-hop socket timeouts, abort-aware
   (`signal` cancels mid-flight).
+- PDF text extraction via the official MuPDF.js engine (the same C library pymupdf wraps):
+  object streams, all filters, ToUnicode fonts, encryption detection, and a
+  pymupdf4llm-style markdown layer (headings, bold/italic, code fences, links, tables)
+  with Studio's corrupted/incomplete fallback to plain text.
 - Content sniffing: MIME allow/deny, binary magic signatures, PDF magic + text extraction
   (built-in zlib-based extractor, not pymupdf-grade), charset decoding (declared charset, BOM
   sniffing for UTF-8/16/32, cp1252 rescue for mislabeled single-byte pages).
@@ -81,6 +85,8 @@ The suite ports Unsloth Studio's own tests for these tools:
   (from `test_web_fetch_extraction.py`; the fetch client is injected via seams)
 - `test/engines.test.ts` — the ddgs engine port: normalizers, the XPath subset, the
   aggregator, the ranker, and the Wikipedia engine with a stubbed fetch
+- `test/pdf-parity.test.ts` — MuPDF engine capabilities: PDF 1.5 object streams,
+  ASCII85Decode, font `/Differences` encodings, pymupdf4llm-style headings/links/tables
 - `test/smoke.test.ts` — live network checks against real hosts
 
 The seams (`seams.resolve` / `seams.request` / `rawFetch`) replace the network stack

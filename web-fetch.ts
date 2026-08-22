@@ -1,7 +1,6 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
-import { inflateSync } from "node:zlib";
 import type { IncomingMessage } from "node:http";
 import {
   checkUrlAccess,
@@ -11,12 +10,11 @@ import {
   type WebsitePolicy,
 } from "./web-access.ts";
 import { htmlToMarkdown } from "./html-to-md.ts";
+import { extractPdfText, PdfParseError, MAX_PAGE_CHARS } from "./pdf.ts";
 
-export const MAX_PAGE_CHARS = 100_000;
 const MIN_PAGE_CHARS = 2000;
 const MAX_FETCH_BYTES = 512 * 1024;
 const MAX_PDF_FETCH_BYTES = 10 * 1024 * 1024;
-const MAX_WEB_PDF_PAGES = 50;
 const MAX_REDIRECTS = 5;
 
 const USER_AGENTS = [
@@ -435,201 +433,6 @@ function requestHop(opts: HopOptions): Promise<HopResponse> {
 
 
 
-function decodePdfString(raw: string): string {
-  let out = "";
-  for (let i = 0; i < raw.length; i++) {
-    const c = raw[i];
-    if (c === "\\") {
-      const n = raw[i + 1];
-      if (n === "n") { out += "\n"; i++; }
-      else if (n === "r") { out += "\r"; i++; }
-      else if (n === "t") { out += "\t"; i++; }
-      else if (n === "b") { out += "\b"; i++; }
-      else if (n === "f") { out += "\f"; i++; }
-      else if (n === "(" || n === ")" || n === "\\") { out += n; i++; }
-      else if (n >= "0" && n <= "7") {
-        let octal = n;
-        i++;
-        let count = 1;
-        while (count < 3 && i + 1 < raw.length && raw[i + 1] >= "0" && raw[i + 1] <= "7") {
-          octal += raw[i + 1];
-          i++;
-          count++;
-        }
-        out += String.fromCharCode(parseInt(octal, 8));
-      }
-      else if (n === "\n" || n === "\r") {
-        i++;
-        if (raw[i + 1] === "\n") i++;
-      }
-      else if (n !== undefined) { out += n; i++; }
-    } else {
-      out += c;
-    }
-  }
-  return out;
-}
-
-export class PdfParseError extends Error {
-  constructor() {
-    super("pdf parse failed");
-  }
-}
-
-function pdfStreams(data: Buffer): Buffer[] {
-  const text = data.toString("latin1");
-  if (/\/Encrypt\b/.test(text)) throw new PdfParseError();
-  const streams: Buffer[] = [];
-  const streamRe = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
-  let match: RegExpExecArray | null;
-  while ((match = streamRe.exec(text)) !== null) {
-    const start = match.index;
-    const dictStart = Math.max(0, text.lastIndexOf("<<", start));
-    const dictText = text.slice(dictStart, start);
-    const isFlate = /\/Filter\s*\/FlateDecode|\/FlateDecode/.test(dictText);
-    const raw = Buffer.from(match[1], "latin1");
-    let bytes = raw;
-    if (isFlate) {
-      try {
-        bytes = inflateSync(raw);
-      } catch {
-        continue;
-      }
-    }
-    streams.push(bytes);
-  }
-  if (!streams.length) throw new PdfParseError();
-  return streams;
-}
-
-export function extractPdfText(data: Buffer): string {
-  const streams = pdfStreams(data);
-  const totalPages = streams.length;
-  const pageLimitReached = totalPages > MAX_WEB_PDF_PAGES;
-  const parts: string[] = [];
-  let length = 0;
-  let textLimited = false;
-  for (let index = 0; index < streams.length && index < MAX_WEB_PDF_PAGES; index++) {
-    const pageText = extractTextOps(streams[index]).trim();
-    if (!pageText) continue;
-    const section = `## Page ${index + 1}\n\n${pageText}`;
-    const piece = (parts.length ? "\n\n" : "") + section;
-    const remaining = MAX_PAGE_CHARS - length;
-    if (piece.length > remaining) {
-      parts.push(piece.slice(0, remaining));
-      textLimited = true;
-      break;
-    }
-    parts.push(piece);
-    length += piece.length;
-  }
-  let text = parts.join("").trimEnd();
-  if (!text) {
-    if (pageLimitReached) {
-      return `(PDF contains no extractable text in the first ${MAX_WEB_PDF_PAGES} pages)`;
-    }
-    return "";
-  }
-  const limits: string[] = [];
-  if (textLimited) {
-    limits.push(`text limited to ${MAX_PAGE_CHARS.toLocaleString("en-US")} characters`);
-  }
-  if (pageLimitReached) {
-    limits.push(`page processing capped at ${MAX_WEB_PDF_PAGES} pages`);
-  }
-  if (limits.length) {
-    const marker = `\n\n... (PDF extraction ${limits.join("; ")})`;
-    text = text.slice(0, MAX_PAGE_CHARS - marker.length).trimEnd() + marker;
-  }
-  return text;
-}
-
-function extractTextOps(bytes: Buffer): string {
-  const text = bytes.toString("latin1");
-  const out: string[] = [];
-  let inText = false;
-  let i = 0;
-  const n = text.length;
-  while (i < n) {
-    const c = text[i];
-    if (c === "%") {
-      while (i < n && text[i] !== "\n") i++;
-      continue;
-    }
-    if (c === "(") {
-      let depth = 1;
-      let j = i + 1;
-      let raw = "";
-      while (j < n && depth) {
-        const ch = text[j];
-        if (ch === "\\") {
-          raw += ch + (text[j + 1] ?? "");
-          j += 2;
-          continue;
-        }
-        if (ch === "(") depth++;
-        if (ch === ")") depth--;
-        if (depth) raw += ch;
-        j++;
-      }
-      if (inText) out.push(decodePdfString(raw));
-      i = j;
-      continue;
-    }
-    if (c === "[") {
-      const parts: string[] = [];
-      let depth = 1;
-      let j = i + 1;
-      while (j < n && depth) {
-        const ch = text[j];
-        if (ch === "(") {
-          let k = j + 1;
-          let inner = "";
-          let innerDepth = 1;
-          while (k < n && innerDepth) {
-            const ic = text[k];
-            if (ic === "\\") { inner += ic + (text[k + 1] ?? ""); k += 2; continue; }
-            if (ic === "(") innerDepth++;
-            if (ic === ")") innerDepth--;
-            if (innerDepth) inner += ic;
-            k++;
-          }
-          parts.push(decodePdfString(inner));
-          j = k;
-          continue;
-        }
-        if (ch === "]") depth--;
-        if (ch === "[") depth++;
-        j++;
-      }
-      if (inText) out.push(parts.join(""));
-      i = j;
-      continue;
-    }
-    if (c === "<") {
-      const close = text.indexOf(">", i + 1);
-      if (close !== -1) {
-        const hex = text.slice(i + 1, close).replace(/\s+/g, "");
-        if (/^[0-9a-fA-F]*$/.test(hex) && hex.length % 2 === 0) {
-          if (inText) out.push(Buffer.from(hex, "hex").toString("latin1"));
-          i = close + 1;
-          continue;
-        }
-      }
-    }
-    const token = text.slice(i, i + 2);
-    if (token === "BT") { inText = true; i += 2; continue; }
-    if (token === "ET") { inText = false; i += 2; continue; }
-    if (token === "Td" || token === "TD" || token === "Tm" || token === "T*") {
-      if (inText) out.push("\n");
-      i += 2;
-      continue;
-    }
-    i++;
-  }
-  return out.join("").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-}
-
 export async function fetchUrlRaw(
   url: string,
   options: RawFetchOptions = {},
@@ -745,7 +548,7 @@ export async function fetchUrlRaw(
     if (isPdf) {
       let pdfText: string;
       try {
-        pdfText = extractPdfText(response.body);
+        pdfText = await extractPdfText(response.body);
       } catch {
         return { error: "(PDF content could not be read as text)", body: "", contentType };
       }

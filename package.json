@@ -24,6 +24,7 @@
     "html-to-md.ts",
     "engines.ts",
     "entities.ts",
+    "pdf.ts",
     "README.md",
     "ROADMAP.md",
     "LICENSE"
@@ -47,8 +48,11 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.0",
     "@types/node": "^24.0.0",
+    "typebox": "^1.3.7",
     "typescript": "~5.9.3",
-    "vitest": "^4.1.9",
-    "typebox": "^1.3.7"
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "mupdf": "^1.28.0"
   }
 }

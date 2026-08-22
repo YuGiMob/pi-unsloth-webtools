@@ -52,28 +52,47 @@ function seamFor(body: Buffer, contentType: string | null): FetchSeams {
   return seamWithResponse(body, contentType);
 }
 
+export interface PdfLine {
+  text: string;
+  x?: number;
+  y?: number;
+  size?: number;
+}
+
 export function makePdf(
-  pages: string[],
+  pages: Array<string | string[] | PdfLine[]>,
   options: { encrypt?: boolean; flate?: boolean } = {},
 ): Buffer {
   const objects: string[] = [];
   const kids: string[] = [];
-  for (const text of pages) {
-    const pageNum = 3 + objects.length;
-    const streamNum = pageNum + 1;
-    const content = `BT /F1 12 Tf 72 720 Td (${text}) Tj ET`;
+  for (let pi = 0; pi < pages.length; pi++) {
+    const pageNum = 3 + 4 * pi;
+    const streamNum = 4 + 4 * pi;
+    const rawLines = pages[pi];
+    const lines: (string | PdfLine)[] = Array.isArray(rawLines) ? rawLines : [rawLines];
+    const content = lines
+      .map((entry, i) => {
+        const line = typeof entry === "string" ? { text: entry } : entry;
+        const x = line.x ?? 72;
+        const y = line.y ?? 720 - i * 16;
+        const size = line.size ?? 12;
+        const font = size >= 20 ? "F2" : "F1";
+        return `BT /${font} ${size} Tf ${x} ${y} Td (${line.text}) Tj ET`;
+      })
+      .join("\n");
     const raw = Buffer.from(content, "latin1");
-    const streamBytes =
-      options.flate === true ? deflate(raw) : raw;
+    const streamBytes = options.flate === true ? deflateSync(raw) : raw;
     const filter = options.flate === true ? " /Filter /FlateDecode" : "";
     kids.push(`${pageNum} 0 R`);
     objects.push(
-      `${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${streamNum} 0 R >>\nendobj`,
+      `${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents ${streamNum} 0 R >>\nendobj`,
     );
     objects.push(
       `${streamNum} 0 obj\n<< /Length ${streamBytes.length}${filter} >>\nstream\n${streamBytes.toString("latin1")}\nendstream\nendobj`,
     );
   }
+  objects.push("5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj");
+  objects.push("6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj");
   const encryptObj = options.encrypt
     ? "99 0 obj\n<< /Filter /Standard /V 2 /Length 128 >>\nendobj\n"
     : "";

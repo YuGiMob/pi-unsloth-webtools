@@ -3,25 +3,40 @@
 Tracking the remaining gaps between this port and Unsloth Studio's web tools, and the
 planned work to close them.
 
-## Planned
+## Implemented
 
-### Full pymupdf-grade PDF text extraction
+### PDF text extraction (MuPDF engine)
 
-Currently: a minimal built-in extractor (zlib inflate + PDF text operators). It handles
-plain and FlateDecode-compressed text streams with `Tj`/`TJ` operators, which covers
-simple text PDFs. It does not handle:
+`pdf.ts` uses the official **MuPDF.js** (`mupdf` npm package) — the same C engine that
+PyMuPDF wraps — replacing the earlier minimal built-in extractor:
 
-- xref table traversal and PDF 1.5+ object streams (content may live in compressed
-  object streams)
-- Filters other than FlateDecode (LZW, ASCIIHex, ASCII85, RunLength, DCT, CCITT)
-- ToUnicode CMaps and font encodings (non-Latin text extracts as latin1 bytes and can
-  mojibake)
-- Encryption (detected via `/Encrypt` and reported as unreadable, matching pymupdf's
+- Full xref handling: tables, cross-reference streams, and PDF 1.5+ object streams
+- All standard stream filters (FlateDecode, ASCII85Decode, LZW, RunLength, DCT, JPX, ...)
+- Font encodings and ToUnicode mapping (non-Latin text extracts correctly)
+- Encryption detection via `needsPassword()` (reported as unreadable, matching pymupdf's
   no-password behavior)
+- The markdown layer replicates pymupdf4llm's algorithm: `IdentifyHeaders` font-size
+  heading detection, `get_raw_lines` line reconstruction (tolerance 3, 10% span-join
+  delta), `write_text` styling (bold/italic/mono, code fences, bullets, link
+  resolution with `%0x`-escaped URIs), and Studio's corrupted/incomplete fallback to
+  plain MuPDF text with the exact thresholds from `backend/core/rag/parsers.py`
+- Table detection and pipe-markdown rendering matching pymupdf's `Table.to_markdown`
+  shape (`|header|`, `|---|`, detail rows, `Col{i}` fill for empty headers)
 
-Studio uses `pymupdf`; the plan is to replace the built-in extractor with a proper PDF
-library (or a full parser) while keeping the page-capping and `text limited to` /
-`page processing capped at` markers. **Target: next major version.**
+Known deltas vs pymupdf4llm:
+
+- Span-level styling: MuPDF.js's structured-text JSON exposes one font per line, so
+  mixed-style lines (one bold word inside a body line) style the whole line instead of
+  per-span. Line-level styling matches for homogeneous lines.
+- Superscript/subscript/underline/strikeout/highlight markers are not emitted (the
+  JSON does not expose char-level flags).
+- Table detection is a conservative text-grid detector (column-start clustering with
+  a 5 pt tolerance, contiguous multi-row bands) instead of PyMuPDF's
+  `find_tables()` vector-graphics analysis. Aligned text tables are detected; tables
+  defined only by drawn rules without aligned text are not.
+
+The minimal extractor remains as an automatic fallback when the `mupdf` package cannot
+be loaded (for example a stripped install).
 
 ## Not planned (explicit decisions)
 

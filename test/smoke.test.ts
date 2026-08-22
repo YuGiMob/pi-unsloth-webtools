@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fetchPageText, fetchUrlRaw, extractPdfText, hasPdfMagic } from "../web-fetch.ts";
+import { fetchPageText, fetchUrlRaw, hasPdfMagic } from "../web-fetch.ts";
+import { extractPdfText } from "../pdf.ts";
 import { ddgSearch } from "../web-search.ts";
 import { deflateSync } from "node:zlib";
 
@@ -38,7 +39,7 @@ describe("live smoke", () => {
     expect(result.error).toContain("Blocked");
   });
 
-  it("extracts text from a flate-compressed pdf", () => {
+  it("extracts text from a flate-compressed pdf", async () => {
     const content = "BT /F1 12 Tf 72 720 Td (Hello PDF world) Tj ET";
     const compressed = deflateSync(Buffer.from(content, "latin1"));
     const pdf = Buffer.from(
@@ -51,7 +52,7 @@ describe("live smoke", () => {
       "trailer\n<< /Root 1 0 R >>\n%%EOF\n",
       "latin1",
     );
-    const text = extractPdfText(pdf);
+    const text = await extractPdfText(pdf);
     expect(text).toContain("Hello PDF world");
   });
   it("detects pdf magic before extraction", () => {

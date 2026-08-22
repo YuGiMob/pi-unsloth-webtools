@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { webSearch } from "./web-search.ts";
-import { fetchPageText, MAX_PAGE_CHARS } from "./web-fetch.ts";
+import { fetchPageText } from "./web-fetch.ts";
+import { MAX_PAGE_CHARS } from "./pdf.ts";
 
 const FETCH_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_CHARS = MAX_PAGE_CHARS;
