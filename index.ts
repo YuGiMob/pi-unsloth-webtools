@@ -2,10 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { webSearch } from "./web-search.ts";
 import { fetchPageText } from "./web-fetch.ts";
-import { MAX_PAGE_CHARS } from "./pdf.ts";
 
 const FETCH_TIMEOUT_MS = 60_000;
-const DEFAULT_MAX_CHARS = MAX_PAGE_CHARS;
 
 const WebSearchParams = Type.Object({
   query: Type.Optional(
@@ -23,8 +21,7 @@ const WebFetchParams = Type.Object({
   url: Type.String({ description: "URL of the page to fetch" }),
   maxChars: Type.Optional(
     Type.Number({
-      description: "Maximum characters of content to return (default: 100000)",
-      default: DEFAULT_MAX_CHARS,
+      description: "Truncate the returned content to this many characters (default: no limit)",
     }),
   ),
 });
@@ -77,7 +74,7 @@ export default function (pi: ExtensionAPI) {
       const maxChars =
         typeof params.maxChars === "number" && params.maxChars > 0
           ? params.maxChars
-          : DEFAULT_MAX_CHARS;
+          : undefined;
       const text = await fetchPageText(params.url, {
         timeoutMs: FETCH_TIMEOUT_MS,
         signal: signal ?? undefined,

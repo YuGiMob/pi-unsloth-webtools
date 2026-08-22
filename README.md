@@ -45,8 +45,9 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   links, emphasis, lists, tables, blockquotes, code fences, entity decoding; hidden-element
   stripping (`hidden`, `aria-hidden`, inline styles); `<article>`/`<main>` main-content scoping
   with link-density header stripping; boilerplate-line removal.
-- Truncation with Studio's `... (truncated, N chars total)` marker (default cap 100,000 chars
-  — deliberately flat and much larger than Studio's window-aware 16,000 — `maxChars` overrides).
+- No page-size budget: fetched pages and PDFs are returned in full (Studio's window-aware
+  cap is deliberately dropped; the optional `maxChars` parameter still truncates when given).
+  The 512 KiB / 10 MiB download caps still bound the raw fetch.
 - HTML entity decoding replicates CPython's `html.unescape` (full 2,231-entry HTML5 table,
   longest-prefix rule, Windows-1252 numeric mappings), matching Studio byte-for-byte.
 

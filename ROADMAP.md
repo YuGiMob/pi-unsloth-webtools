@@ -46,12 +46,13 @@ Studio routes requests through urllib's environment proxies and honors
 `UNSLOTH_STUDIO_DISABLE_DNS_PINNING` for enterprise proxies. This port always connects
 directly with DNS pinning. Deliberately out of scope.
 
-### Window-aware page budgets
+### Page size budgets
 
-Studio's `_page_char_budget()` sizes fetched pages to the serving model's context
-window. This port deliberately uses a flat, much larger cap (`MAX_PAGE_CHARS = 100_000`)
-that does not depend on context length, so a small window gets a bigger page than Studio
-would return.
+Studio's `_page_char_budget()` sizes fetched pages to the serving model's context window.
+This port deliberately has **no character budget at all**: fetched pages and PDFs are
+returned in full (the PDF page-count cap of 50 pages remains, matching Studio). The raw
+download caps (512 KiB text / 10 MiB PDF) still bound what is fetched. A `maxChars`
+parameter remains available on the tool for callers that want to truncate.
 
 ## Known behavioral differences
 

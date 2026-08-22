@@ -83,12 +83,12 @@ describe("pdf handling", () => {
     expect(out).toContain("Cross-reference data was fetched");
   });
 
-  it("caps pdf pages and marks intermediate text limits", async () => {
+  it("caps pdf pages without a character budget", async () => {
     const pages = Array.from({ length: 60 }, () => Array.from({ length: 30 }, () => "x".repeat(100)));
     const out = await fetchWith(makePdf(pages), "application/pdf");
-    expect(out.length).toBeLessThanOrEqual(100_000);
-    expect(out).toContain("text limited to 100,000 characters");
     expect(out).toContain("page processing capped at 50 pages");
+    expect(out).not.toContain("text limited");
+    expect(out.split("## Page").length - 1).toBe(50);
   });
 
   it("does not mark a pdf at exactly the page cap", async () => {

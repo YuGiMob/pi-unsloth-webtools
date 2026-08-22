@@ -1,7 +1,6 @@
 import { createRequire } from "node:module";
 import { inflateSync } from "node:zlib";
 
-export const MAX_PAGE_CHARS = 100_000;
 export const MAX_WEB_PDF_PAGES = 50;
 
 export class PdfParseError extends Error {
@@ -514,22 +513,11 @@ function assemblePages(
   pageLimitOverride?: boolean,
 ): string {
   const parts: string[] = [];
-  let length = 0;
-  let textLimited = false;
   const pageLimitReached = pageLimitOverride ?? pages.length >= MAX_WEB_PDF_PAGES;
   for (const page of pages) {
     const pageText = page.text.trim();
     if (!pageText) continue;
-    const section = `## Page ${page.pageNumber}\n\n${pageText}`;
-    const piece = (parts.length ? "\n\n" : "") + section;
-    const remaining = MAX_PAGE_CHARS - length;
-    if (piece.length > remaining) {
-      parts.push(piece.slice(0, remaining));
-      textLimited = true;
-      break;
-    }
-    parts.push(piece);
-    length += piece.length;
+    parts.push((parts.length ? "\n\n" : "") + `## Page ${page.pageNumber}\n\n${pageText}`);
   }
   let text = parts.join("").trimEnd();
   if (!text) {
@@ -538,16 +526,8 @@ function assemblePages(
     }
     return "";
   }
-  const limits: string[] = [];
-  if (textLimited) {
-    limits.push(`text limited to ${MAX_PAGE_CHARS.toLocaleString("en-US")} characters`);
-  }
   if (pageLimitReached) {
-    limits.push(`page processing capped at ${MAX_WEB_PDF_PAGES} pages`);
-  }
-  if (limits.length) {
-    const marker = `\n\n... (PDF extraction ${limits.join("; ")})`;
-    text = text.slice(0, MAX_PAGE_CHARS - marker.length).trimEnd() + marker;
+    text += `\n\n... (PDF extraction page processing capped at ${MAX_WEB_PDF_PAGES} pages)`;
   }
   return text;
 }

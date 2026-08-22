@@ -10,7 +10,7 @@ import {
   type WebsitePolicy,
 } from "./web-access.ts";
 import { htmlToMarkdown } from "./html-to-md.ts";
-import { extractPdfText, PdfParseError, MAX_PAGE_CHARS } from "./pdf.ts";
+import { extractPdfText, PdfParseError } from "./pdf.ts";
 
 const MIN_PAGE_CHARS = 2000;
 const MAX_FETCH_BYTES = 512 * 1024;
@@ -619,9 +619,9 @@ function statusReason(status: number): string {
   return reasons[status] ?? "";
 }
 
-export function truncatePageText(text: string, maxChars: number): string {
+export function truncatePageText(text: string, maxChars?: number): string {
   if (!text) return "(page returned no readable text)";
-  if (text.length > maxChars) {
+  if (typeof maxChars === "number" && maxChars > 0 && text.length > maxChars) {
     return text.slice(0, maxChars) + `\n\n... (truncated, ${text.length} chars total)`;
   }
   return text;
@@ -636,7 +636,7 @@ export async function fetchPageText(
   const deadlineMs = options.deadlineMs ?? now() + timeoutMs;
   const signal = options.signal;
   const policy = options.websitePolicy ?? null;
-  const maxChars = options.maxChars ?? MAX_PAGE_CHARS;
+  const maxChars = options.maxChars;
   const rawFetch = options.rawFetch ?? fetchUrlRaw;
 
   url = normalizeUrlScheme(url);
