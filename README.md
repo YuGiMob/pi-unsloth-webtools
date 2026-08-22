@@ -10,9 +10,12 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) extension providing `w
 
 Mirrors Unsloth Studio's `web_search` tool:
 
-- Searches DuckDuckGo the same way Studio's `ddgs` client does (POST to the HTML endpoint), and
-  formats results identically: `Title:` / `URL:` / `Snippet:` blocks separated by `---`, ending
-  with the hint to pass `{"url": "<URL>"}` to read a full page.
+- Searches exactly like Studio's pinned `ddgs==9.14.4` `DDGS.text()`: the same seven engines
+  (duckduckgo, brave, google, mojeek, yahoo, yandex, wikipedia; bing is disabled upstream),
+  the same provider-deduplication, href-dedupe aggregator with frequency ordering, and the
+  same `SimpleFilterRanker` re-ranking. Formats results identically: `Title:` / `URL:` /
+  `Snippet:` blocks separated by `---`, ending with the hint to pass `{"url": "<URL>"}` to
+  read a full page.
 - Accepts an optional `url` parameter; when given, fetches that page's text instead of searching.
 - Rate-limit, timeout, and empty-result messages mirror Studio's `_search_failure_message`.
 
@@ -38,8 +41,12 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   links, emphasis, lists, tables, blockquotes, code fences, entity decoding; hidden-element
   stripping (`hidden`, `aria-hidden`, inline styles); `<article>`/`<main>` main-content scoping
   with link-density header stripping; boilerplate-line removal.
-- Truncation with Studio's `... (truncated, N chars total)` marker (default cap 16,000 chars,
-  `maxChars` parameter overrides).
+- Truncation with Studio's `... (truncated, N chars total)` marker (default cap 100,000 chars
+  — deliberately flat and much larger than Studio's window-aware 16,000 — `maxChars` overrides).
+- HTML entity decoding replicates CPython's `html.unescape` (full 2,231-entry HTML5 table,
+  longest-prefix rule, Windows-1252 numeric mappings), matching Studio byte-for-byte.
+
+See `ROADMAP.md` for the remaining gaps (PDF extraction, TLS fingerprinting, proxies).
 
 ## Install
 
@@ -72,6 +79,8 @@ The suite ports Unsloth Studio's own tests for these tools:
   (from `test_web_access_policy.py`)
 - `test/fetch-flow.test.ts` — GitHub README rewrite, deadline/cancellation, HTML sniffing
   (from `test_web_fetch_extraction.py`; the fetch client is injected via seams)
+- `test/engines.test.ts` — the ddgs engine port: normalizers, the XPath subset, the
+  aggregator, the ranker, and the Wikipedia engine with a stubbed fetch
 - `test/smoke.test.ts` — live network checks against real hosts
 
 The seams (`seams.resolve` / `seams.request` / `rawFetch`) replace the network stack

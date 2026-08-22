@@ -22,7 +22,10 @@
     "web-fetch.ts",
     "web-access.ts",
     "html-to-md.ts",
+    "engines.ts",
+    "entities.ts",
     "README.md",
+    "ROADMAP.md",
     "LICENSE"
   ],
   "pi": {

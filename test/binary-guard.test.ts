@@ -84,10 +84,10 @@ describe("pdf handling", () => {
   });
 
   it("caps pdf pages and marks intermediate text limits", async () => {
-    const pages = Array.from({ length: 60 }, () => "x".repeat(1000));
+    const pages = Array.from({ length: 60 }, () => "x".repeat(2000));
     const out = await fetchWith(makePdf(pages), "application/pdf");
-    expect(out.length).toBeLessThanOrEqual(16_000);
-    expect(out).toContain("text limited to 16,000 characters");
+    expect(out.length).toBeLessThanOrEqual(100_000);
+    expect(out).toContain("text limited to 100,000 characters");
     expect(out).toContain("page processing capped at 50 pages");
   });
 

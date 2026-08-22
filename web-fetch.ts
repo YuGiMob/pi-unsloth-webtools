@@ -12,7 +12,7 @@ import {
 } from "./web-access.ts";
 import { htmlToMarkdown } from "./html-to-md.ts";
 
-const MAX_PAGE_CHARS = 16000;
+export const MAX_PAGE_CHARS = 100_000;
 const MIN_PAGE_CHARS = 2000;
 const MAX_FETCH_BYTES = 512 * 1024;
 const MAX_PDF_FETCH_BYTES = 10 * 1024 * 1024;

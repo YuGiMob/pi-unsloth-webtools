@@ -1,3 +1,5 @@
+import { NAMED_ENTITIES, INVALID_CHARREFS, INVALID_CODEPOINTS } from "./entities.ts";
+
 const SKIP_TAGS = new Set([
   "script",
   "style",
@@ -188,229 +190,30 @@ class HeaderFrame {
   }
 }
 
-const LEGACY_ENTITIES: Record<string, string> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: "\u00a0",
-  copy: "\u00a9",
-  reg: "\u00ae",
-  trade: "\u2122",
-  sect: "\u00a7",
-  para: "\u00b6",
-  middot: "\u00b7",
-  laquo: "\u00ab",
-  raquo: "\u00bb",
-  deg: "\u00b0",
-  plusmn: "\u00b1",
-  frac14: "\u00bc",
-  frac12: "\u00bd",
-  frac34: "\u00be",
-  times: "\u00d7",
-  divide: "\u00f7",
-  micro: "\u00b5",
-  sup1: "\u00b9",
-  sup2: "\u00b2",
-  sup3: "\u00b3",
-  iexcl: "\u00a1",
-  iquest: "\u00bf",
-  bull: "\u2022",
-  hellip: "\u2026",
-  lsquo: "\u2018",
-  rsquo: "\u2019",
-  ldquo: "\u201c",
-  rdquo: "\u201d",
-  ndash: "\u2013",
-  mdash: "\u2014",
-  shy: "\u00ad",
-};
 
-const NAMED_ENTITIES: Record<string, string> = {
-  ...LEGACY_ENTITIES,
-  acirc: "\u00e2",
-  aacute: "\u00e1",
-  aelig: "\u00e6",
-  agrave: "\u00e0",
-  aring: "\u00e5",
-  atilde: "\u00e3",
-  auml: "\u00e4",
-  brvbar: "\u00a6",
-  ccedil: "\u00e7",
-  cedil: "\u00b8",
-  cent: "\u00a2",
-  curren: "\u00a4",
-  dagger: "\u2020",
-  Dagger: "\u2021",
-  eacute: "\u00e9",
-  ecirc: "\u00ea",
-  egrave: "\u00e8",
-  eth: "\u00f0",
-  euml: "\u00eb",
-  euro: "\u20ac",
-  fnof: "\u0192",
-  iacute: "\u00ed",
-  icirc: "\u00ee",
-  igrave: "\u00ec",
-  iuml: "\u00ef",
-  lsaquo: "\u2039",
-  macr: "\u00af",
-  ntilde: "\u00f1",
-  oacute: "\u00f3",
-  ocirc: "\u00f4",
-  oelig: "\u0153",
-  ograve: "\u00f2",
-  ordf: "\u00aa",
-  ordm: "\u00ba",
-  oslash: "\u00f8",
-  otilde: "\u00f5",
-  ouml: "\u00f6",
-  pound: "\u00a3",
-  permil: "\u2030",
-  rsaquo: "\u203a",
-  sbquo: "\u201a",
-  Scaron: "\u0160",
-  scaron: "\u0161",
-  szlig: "\u00df",
-  thorn: "\u00fe",
-  uacute: "\u00fa",
-  ucirc: "\u00fb",
-  ugrave: "\u00f9",
-  uml: "\u00a8",
-  uuml: "\u00fc",
-  yacute: "\u00fd",
-  yen: "\u00a5",
-  yuml: "\u00ff",
-  OElig: "\u0152",
-  Yuml: "\u0178",
-  not: "\u00ac",
-  loz: "\u25ca",
-  spades: "\u2660",
-  clubs: "\u2663",
-  hearts: "\u2665",
-  diams: "\u2666",
-  oline: "\u203e",
-  frasl: "\u2044",
-  weierp: "\u2118",
-  image: "\u2111",
-  real: "\u211c",
-  alefsym: "\u2135",
-  larr: "\u2190",
-  uarr: "\u2191",
-  rarr: "\u2192",
-  darr: "\u2193",
-  harr: "\u2194",
-  crarr: "\u21b5",
-  lArr: "\u21d0",
-  uArr: "\u21d1",
-  rArr: "\u21d2",
-  dArr: "\u21d3",
-  hArr: "\u21d4",
-  forall: "\u2200",
-  part: "\u2202",
-  exist: "\u2203",
-  empty: "\u2205",
-  nabla: "\u2207",
-  isin: "\u2208",
-  notin: "\u2209",
-  ni: "\u220b",
-  prod: "\u220f",
-  sum: "\u2211",
-  minus: "\u2212",
-  lowast: "\u2217",
-  radic: "\u221a",
-  prop: "\u221d",
-  infin: "\u221e",
-  ang: "\u2220",
-  and: "\u2227",
-  or: "\u2228",
-  cap: "\u2229",
-  cup: "\u222a",
-  int: "\u222b",
-  there4: "\u2234",
-  sim: "\u223c",
-  cong: "\u2245",
-  asymp: "\u2248",
-  ne: "\u2260",
-  equiv: "\u2261",
-  le: "\u2264",
-  ge: "\u2265",
-  sub: "\u2282",
-  sup: "\u2283",
-  nsub: "\u2284",
-  sube: "\u2286",
-  supe: "\u2287",
-  oplus: "\u2295",
-  otimes: "\u2297",
-  perp: "\u22a5",
-  sdot: "\u22c5",
-  lceil: "\u2308",
-  rceil: "\u2309",
-  lfloor: "\u230a",
-  rfloor: "\u230b",
-  lang: "〈",
-  rang: "〉",
-  alpha: "α",
-  beta: "β",
-  gamma: "γ",
-  Gamma: "Γ",
-  delta: "δ",
-  Delta: "Δ",
-  epsilon: "ε",
-  Epsilon: "Ε",
-  zeta: "ζ",
-  eta: "η",
-  theta: "θ",
-  Theta: "Θ",
-  iota: "ι",
-  kappa: "κ",
-  lambda: "λ",
-  Lambda: "Λ",
-  mu: "μ",
-  nu: "ν",
-  xi: "ξ",
-  Xi: "Ξ",
-  omicron: "ο",
-  pi: "π",
-  Pi: "Π",
-  rho: "ρ",
-  sigma: "σ",
-  Sigma: "Σ",
-  tau: "τ",
-  upsilon: "υ",
-  Upsilon: "Υ",
-  phi: "φ",
-  Phi: "Φ",
-  chi: "χ",
-  Chi: "Χ",
-  psi: "ψ",
-  Psi: "Ψ",
-  omega: "ω",
-  Omega: "Ω",
-};
-
-function decodeCodePoint(code: number): string {
-  if (code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) {
-    return "\ufffd";
-  }
-  return String.fromCodePoint(code);
-}
+const CHARREF_RE = /&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)/g;
 
 export function decodeHtmlEntities(text: string): string {
-  return text.replace(
-    /&(?:#(?:[xX]([0-9a-fA-F]+)|([0-9]+))|([A-Za-z][A-Za-z0-9.-]*));?/g,
-    (whole, hex, dec, named) => {
-      if (hex !== undefined) return decodeCodePoint(parseInt(hex, 16));
-      if (dec !== undefined) return decodeCodePoint(parseInt(dec, 10));
-      const known = NAMED_ENTITIES[named];
-      if (known !== undefined) return known;
-      if (whole.endsWith(";")) return whole;
-      if (named in LEGACY_ENTITIES) return LEGACY_ENTITIES[named];
-      return whole;
-    },
-  );
+  return text.replace(CHARREF_RE, (whole, s: string) => {
+    if (s[0] === "#") {
+      const hex = s[1] === "x" || s[1] === "X";
+      const num = parseInt(s.slice(2).replace(/;+$/, ""), hex ? 16 : 10);
+      const mapped = INVALID_CHARREFS[num];
+      if (mapped !== undefined) return mapped;
+      if ((num >= 0xd800 && num <= 0xdfff) || num > 0x10ffff) return "\ufffd";
+      if (INVALID_CODEPOINTS.has(num)) return "";
+      return String.fromCodePoint(num);
+    }
+    const known = NAMED_ENTITIES[s];
+    if (known !== undefined) return known;
+    for (let x = s.length - 1; x > 1; x--) {
+      const prefix = s.slice(0, x);
+      if (prefix in NAMED_ENTITIES) return NAMED_ENTITIES[prefix] + s.slice(x);
+    }
+    return "&" + s;
+  });
 }
+
 
 interface HtmlHandlers {
   handleStartTag(name: string, attrs: AttrDict): void;
@@ -520,7 +323,7 @@ export function feedHtml(input: string, handlers: HtmlHandlers): void {
         continue;
       }
       const legacy = /^&([A-Za-z][A-Za-z0-9.-]*)(?=[^A-Za-z0-9]|$)/.exec(text.slice(amp));
-      if (legacy && legacy[1] in LEGACY_ENTITIES) {
+      if (legacy) {
         handlers.handleEntityRef(legacy[1]);
         pos = amp + legacy[0].length;
         continue;

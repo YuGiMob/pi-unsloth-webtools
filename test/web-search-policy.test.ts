@@ -4,13 +4,11 @@ import { scopeSearchQuery, websitePolicyPrompt } from "../web-access.ts";
 import {
   EmptySweepError,
   EMPTY_SEARCH_RESULTS,
-  RateLimitError,
-
   SearchTimeoutError,
   webSearch,
   type SearchClient,
-  type SearchResult,
 } from "../web-search.ts";
+import type { SearchResult } from "../engines.ts";
 
 const ARXIV_ONLY = { allowedDomains: ["arxiv.org"], blockedDomains: [] };
 
@@ -113,12 +111,20 @@ describe("web_search policy behavior", () => {
     expect(result).toContain("URL: https://arxiv.org/abs/real");
   });
 
-  it("reports rate limiting instead of leaking the exception", async () => {
+  it("reports an all-engines-failed sweep as no results", async () => {
     const client = fakeClient(() => {
-      throw new RateLimitError();
+      throw new EmptySweepError();
     });
     const result = await webSearch("q", { client });
-    expect(result).toContain("rate limiting this machine");
+    expect(result).toBe(EMPTY_SEARCH_RESULTS[0]);
+  });
+
+  it("surfaces unexpected client exceptions as search failures", async () => {
+    const client = fakeClient(() => {
+      throw new Error("some engine failure");
+    });
+    const result = await webSearch("q", { client });
+    expect(result).toBe("Search failed: some engine failure");
   });
 
   it("reports the budget a timeout exceeded", async () => {
