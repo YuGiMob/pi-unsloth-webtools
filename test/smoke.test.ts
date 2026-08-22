@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { fetchPageText, fetchUrlRaw, extractPdfText } from "../web-fetch.ts";
+import { fetchPageText, fetchUrlRaw, extractPdfText, hasPdfMagic } from "../web-fetch.ts";
 import { ddgSearch } from "../web-search.ts";
+import { deflateSync } from "node:zlib";
 
 describe("live smoke", () => {
   it("fetches a GitHub repo page via the README API", async () => {
@@ -37,9 +38,25 @@ describe("live smoke", () => {
     expect(result.error).toContain("Blocked");
   });
 
-  it("extracts text from a real pdf", async () => {
-    const result = await fetchUrlRaw("https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf", { timeoutMs: 30000 });
-    expect(result.error).toBeNull();
-    expect(result.body).toContain("PDF");
-  }, 60000);
+  it("extracts text from a flate-compressed pdf", () => {
+    const content = "BT /F1 12 Tf 72 720 Td (Hello PDF world) Tj ET";
+    const compressed = deflateSync(Buffer.from(content, "latin1"));
+    const pdf = Buffer.from(
+      "%PDF-1.4\n" +
+      "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n" +
+      "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n" +
+      "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n" +
+      `4 0 obj\n<< /Length ${compressed.length} /Filter /FlateDecode >>\nstream\n` +
+      compressed.toString("latin1") + "\nendstream\nendobj\n" +
+      "trailer\n<< /Root 1 0 R >>\n%%EOF\n",
+      "latin1",
+    );
+    const text = extractPdfText(pdf);
+    expect(text).toContain("Hello PDF world");
+  });
+  it("detects pdf magic before extraction", () => {
+    const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n", "latin1");
+    expect(hasPdfMagic(pdf)).toBe(true);
+    expect(hasPdfMagic(Buffer.from("hello world"))).toBe(false);
+  });
 });

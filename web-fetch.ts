@@ -177,7 +177,7 @@ function magicHead(data: Buffer): Buffer {
   return head.subarray(start);
 }
 
-function hasPdfMagic(data: Buffer): boolean {
+export function hasPdfMagic(data: Buffer): boolean {
   const head = magicHead(data);
   const magic = Buffer.from(PDF_MAGIC);
   return head.length >= magic.length && head.subarray(0, magic.length).equals(magic);
@@ -549,7 +549,7 @@ function extractTextOps(bytes: Buffer): string {
         }
       }
     }
-    const token = text.slice(i, i + 3);
+    const token = text.slice(i, i + 2);
     if (token === "BT") { inText = true; i += 2; continue; }
     if (token === "ET") { inText = false; i += 2; continue; }
     if (token === "Td" || token === "TD" || token === "Tm" || token === "T*") {
