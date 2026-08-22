@@ -207,6 +207,21 @@ describe("fetch_page_text conversion paths", () => {
     expect(out).toBe("Failed to fetch URL: HTTP 404 Not Found");
   });
 
+  it("converts pages whose inline scripts contain `<` comparisons", async () => {
+    const body =
+      "<html><head>" +
+      "<script>if (\"u\"<typeof navigator) x()</script>" +
+      Array.from({ length: 12 }, (_, i) => `<script>let v${i} = 1 < 2 < 3;</script>`).join("") +
+      "</head><body><main><h1>Doc Title</h1><p>" +
+      "Readable documentation body text. ".repeat(20) +
+      "</p></main></body></html>";
+    const rawFetch = textFetch({ error: null, body, contentType: "text/html" });
+    const out = await fetchPageText("https://example.com/docs/studio", { rawFetch });
+    expect(out).toContain("Doc Title");
+    expect(out).toContain("Readable documentation body text.");
+    expect(out).not.toContain("<script");
+  });
+
   it("sniffs html without a content-type", async () => {
     const rawFetch = textFetch({ error: null, body: GITHUB_PAGE, contentType: "" });
     const out = await fetchPageText("https://example.com/no-content-type", { rawFetch });

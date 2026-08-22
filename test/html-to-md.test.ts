@@ -322,3 +322,41 @@ describe("html_to_markdown formatting", () => {
     expect(out).toContain("€");
   });
 });
+
+describe("raw-text scanning", () => {
+  it("does not parse `<` inside inline scripts as markup", () => {
+    const html =
+      "<html><head>" +
+      '<script>if ("u"<typeof navigator) x()</script>' +
+"<style>.a { content: \"<\"; }</style>" +
+      "</head><body><article><h1>Title</h1><p>Readable body text here.</p></article></body></html>";
+    const out = htmlToMarkdown(html, true);
+    expect(out).toContain("Title");
+    expect(out).toContain("Readable body text here.");
+  });
+
+  it("keeps skip state balanced across many inline scripts", () => {
+    const scripts = Array.from(
+      { length: 20 },
+      (_, i) => `<script>let a${i} = 1 < 2 < 3; if ("u"<typeof x) a${i}++;</script>`,
+    ).join("");
+    const out = htmlToMarkdown(`<body>${scripts}<p>visible prose after scripts</p></body>`);
+    expect(out).toContain("visible prose after scripts");
+  });
+
+  it("matches closing raw-text tags case-insensitively", () => {
+    const html =
+      '<body><SCRIPT>if ("u"<typeof x) y()</SCRIPT><p>after script</p></body>';
+    const out = htmlToMarkdown(html);
+    expect(out).toContain("after script");
+  });
+
+  it("keeps `<` inside title and textarea content", () => {
+    const html =
+      "<title>a < b &amp; c</title><textarea>x < y</textarea><p>body text</p>";
+    const out = htmlToMarkdown(html);
+    expect(out).toContain("a < b & c");
+    expect(out).toContain("x < y");
+    expect(out).toContain("body text");
+  });
+});

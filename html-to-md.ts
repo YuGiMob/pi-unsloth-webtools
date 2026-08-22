@@ -227,6 +227,21 @@ interface HtmlHandlers {
 const START_TAG_NAME_RE = /^[a-zA-Z][^\s/>]*/;
 const ATTR_NAME_RE = /^[^\s=/>]+/;
 
+const RAW_TEXT_TAGS = [
+  "script",
+  "style",
+  "textarea",
+  "title",
+  "xmp",
+  "iframe",
+  "noembed",
+  "noframes",
+];
+
+const RAW_TEXT_CLOSERS: Record<string, RegExp> = Object.fromEntries(
+  RAW_TEXT_TAGS.map((name) => [name, new RegExp(`</${name}\\s*>`, "i")]),
+);
+
 function parseAttrsUntilClose(input: string, pos: number): [AttrDict, number, boolean] {
   const attrs: AttrDict = {};
   while (pos < input.length) {
@@ -346,8 +361,22 @@ export function feedHtml(input: string, handlers: HtmlHandlers): void {
       continue;
     }
     emitText(input.slice(textStart, i));
-    if (tag.kind === "start") handlers.handleStartTag(tag.name!, tag.attrs!);
-    else if (tag.kind === "startend") handlers.handleStartEndTag(tag.name!, tag.attrs!);
+    if (tag.kind === "start") {
+      const rawCloser = RAW_TEXT_CLOSERS[tag.name!];
+      if (rawCloser) {
+        const after = input.slice(tag.end);
+        const closeMatch = rawCloser.exec(after);
+        if (closeMatch) {
+          handlers.handleStartTag(tag.name!, tag.attrs!);
+          emitText(after.slice(0, closeMatch.index));
+          handlers.handleEndTag(tag.name!);
+          textStart = tag.end + closeMatch.index + closeMatch[0].length;
+          i = textStart;
+          continue;
+        }
+      }
+      handlers.handleStartTag(tag.name!, tag.attrs!);
+    } else if (tag.kind === "startend") handlers.handleStartEndTag(tag.name!, tag.attrs!);
     else if (tag.kind === "end") handlers.handleEndTag(tag.name!);
     textStart = tag.end;
     i = tag.end;
