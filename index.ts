@@ -1,0 +1,104 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import {
+  ddgSearch,
+  EMPTY_SEARCH_RESULTS,
+  formatSearchResults,
+  searchFailureMessage,
+  type SearchResult,
+} from "./web-search.ts";
+import { fetchPageText } from "./web-fetch.ts";
+
+const FETCH_TIMEOUT_MS = 60_000;
+const DEFAULT_MAX_CHARS = 16_000;
+
+const WebSearchParams = Type.Object({
+  query: Type.Optional(
+    Type.String({ description: "The search query" }),
+  ),
+  url: Type.Optional(
+    Type.String({
+      description:
+        "A URL to fetch full page content from (instead of searching). Use this to read a page found in search results.",
+    }),
+  ),
+});
+
+const WebFetchParams = Type.Object({
+  url: Type.String({ description: "URL of the page to fetch" }),
+  maxChars: Type.Optional(
+    Type.Number({
+      description: "Maximum characters of content to return (default: 16000)",
+      default: DEFAULT_MAX_CHARS,
+    }),
+  ),
+});
+
+export default function (pi: ExtensionAPI) {
+  pi.registerTool({
+    name: "web_search",
+    label: "Web Search",
+    description:
+      "Search the web and fetch page content. Returns snippets for all results. " +
+      "Use the url parameter to fetch full page text from a specific URL.",
+    promptSnippet: "Search the web and fetch page content",
+    promptGuidelines: [
+      "Use web_search with the url parameter (e.g. {\"url\": \"<URL>\"}) to read the full text of a page found in search results.",
+    ],
+    parameters: WebSearchParams,
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      if (params.url?.trim()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: await fetchPageText(params.url.trim(), {
+                timeoutMs: FETCH_TIMEOUT_MS,
+                signal: signal ?? undefined,
+              }),
+            },
+          ],
+          details: {},
+        };
+      }
+      if (!params.query?.trim()) {
+        return { content: [{ type: "text", text: "No query provided." }], details: {} };
+      }
+      try {
+        const results: SearchResult[] = await ddgSearch(params.query, signal ?? undefined);
+        if (!results.length) {
+          return { content: [{ type: "text", text: EMPTY_SEARCH_RESULTS[0] }], details: {} };
+        }
+        return { content: [{ type: "text", text: formatSearchResults(results) }], details: {} };
+      } catch (err) {
+        return { content: [{ type: "text", text: searchFailureMessage(err) }], details: {} };
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "web_fetch",
+    label: "Web Fetch",
+    description:
+      "Fetch a URL and return readable text content. HTML responses are converted to Markdown " +
+      "with a main-content heuristic (article/main scoping, hidden-element and boilerplate " +
+      "stripping); non-HTML text responses are returned as-is. GitHub repo root pages are " +
+      "rewritten to the README API so the model reads the README instead of the repo page's UI " +
+      "chrome. Blocks private/loopback/link-local targets (SSRF protection) and caps the " +
+      "download size.",
+    promptSnippet: "Fetch a web page and return readable text content",
+    parameters: WebFetchParams,
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      const maxChars =
+        typeof params.maxChars === "number" && params.maxChars > 0
+          ? params.maxChars
+          : DEFAULT_MAX_CHARS;
+      const text = await fetchPageText(params.url, {
+        timeoutMs: FETCH_TIMEOUT_MS,
+        signal: signal ?? undefined,
+        maxChars,
+      });
+      return { content: [{ type: "text", text }], details: {} };
+    },
+  });
+}
