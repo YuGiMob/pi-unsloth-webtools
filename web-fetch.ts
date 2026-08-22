@@ -383,7 +383,8 @@ function requestHop(opts: HopOptions): Promise<HopResponse> {
     const request = transport.request(options, (res: IncomingMessage) => {
       const chunks: Buffer[] = [];
       let total = 0;
-      let limit = opts.maxBytes;
+      const declaredPdf = String(res.headers["content-type"] ?? "").toLowerCase().includes("pdf");
+      let limit = declaredPdf ? opts.maxPdfBytes : opts.maxBytes;
       let extendedForPdf = false;
       let done = false;
       const finish = (err: string | null, body: Buffer) => {
@@ -399,9 +400,8 @@ function requestHop(opts: HopOptions): Promise<HopResponse> {
       };
       res.on("data", (chunk: Buffer) => {
         if (done) return;
-        if (!extendedForPdf && total + chunk.length > opts.maxBytes) {
-          const contentType = String(res.headers["content-type"] ?? "").toLowerCase();
-          if (!contentType.includes("pdf") && hasPdfMagic(Buffer.concat(chunks))) {
+        if (!declaredPdf && !extendedForPdf && total + chunk.length > opts.maxBytes) {
+          if (hasPdfMagic(Buffer.concat(chunks))) {
             limit = opts.maxPdfBytes;
             extendedForPdf = true;
           }

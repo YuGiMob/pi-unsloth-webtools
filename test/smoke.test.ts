@@ -55,6 +55,14 @@ describe("live smoke", () => {
     const text = await extractPdfText(pdf);
     expect(text).toContain("Hello PDF world");
   });
+  it("extracts a real multi-page pdf past the text cap", async () => {
+    const result = await fetchUrlRaw("https://arxiv.org/pdf/2305.07147", { timeoutMs: 60000 });
+    expect(result.error).toBeNull();
+    expect(result.body.length).toBe(100_000);
+    expect(result.body).toContain("text limited to 100,000 characters");
+    expect(result.body).toContain("## Page");
+  }, 90000);
+
   it("detects pdf magic before extraction", () => {
     const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n", "latin1");
     expect(hasPdfMagic(pdf)).toBe(true);
