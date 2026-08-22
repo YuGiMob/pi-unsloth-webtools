@@ -58,6 +58,26 @@ npm run typecheck
 npm test
 ```
 
+## Tests
+
+The suite ports Unsloth Studio's own tests for these tools:
+
+- `test/html-to-md.test.ts` — hidden-element stripping and main-content scoping (from
+  `test_web_fetch_extraction.py`)
+- `test/header-strip.test.ts` — the header link-density suite plus article-vs-main selection
+  and boilerplate cases (from `test_web_fetch_extraction.py`)
+- `test/binary-guard.test.ts` — the MIME/magic/charset/PDF matrix (from
+  `test_web_fetch_binary_guard.py`)
+- `test/web-search-policy.test.ts` — policy filtering, overfetch, and failure messages
+  (from `test_web_access_policy.py`)
+- `test/fetch-flow.test.ts` — GitHub README rewrite, deadline/cancellation, HTML sniffing
+  (from `test_web_fetch_extraction.py`; the fetch client is injected via seams)
+- `test/smoke.test.ts` — live network checks against real hosts
+
+The seams (`seams.resolve` / `seams.request` / `rawFetch`) replace the network stack
+with fakes, mirroring how the Studio suite monkeypatches `_validate_and_resolve_host`
+and `build_opener`.
+
 ## License
 
 The ported logic derives from Unsloth Studio

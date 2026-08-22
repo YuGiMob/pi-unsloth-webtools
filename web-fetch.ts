@@ -95,9 +95,9 @@ const HTML_LEADING_TAGS = [
 ];
 
 const HTML_LEADING_RE = new RegExp(
-  `<(?:!doctype\\s+html|/?(?:${HTML_LEADING_TAGS.join("|")})\\b)`,
+  `^<(?:!doctype\\s+html|/?(?:${HTML_LEADING_TAGS.join("|")})\\b)`,
 );
-const HTML_DOCUMENT_RE = /<(?:!doctype\s+html\b|\/?(?:html|head|body)\b)/;
+const HTML_DOCUMENT_RE = /^<(?:!doctype\s+html\b|\/?(?:html|head|body)\b)/;
 
 const MIN_SINGLE_BYTE_ASCII_RATIO = 3 / 4;
 const ASCII_TEXT_BYTES = new Set<number>([
@@ -119,16 +119,56 @@ const CP1252_HIGH: Record<number, number> = {
 
 export interface FetchPageOptions {
   timeoutMs?: number;
+  deadlineMs?: number;
+  nowMs?: () => number;
   signal?: AbortSignal;
   websitePolicy?: WebsitePolicy | null;
   maxChars?: number;
+  maxBytes?: number;
+  maxPdfBytes?: number;
+  seams?: FetchSeams;
+  rawFetch?: (url: string, options: RawFetchOptions) => Promise<RawFetchResult>;
 }
 
-interface RawFetchOptions {
+export interface HopResponse {
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  body: Buffer;
+}
+
+export interface ResolvedHost {
+  ok: boolean;
+  reason: string;
+  ip: string;
+  family: number;
+}
+
+export interface FetchSeams {
+  resolve?: (hostname: string, signal?: AbortSignal) => Promise<ResolvedHost>;
+  request?: (opts: HopOptions) => Promise<HopResponse>;
+}
+
+export interface HopOptions {
+  url: URL;
+  pinnedIp: string;
+  family: number;
+  headers: Record<string, string>;
+  maxBytes: number;
+  maxPdfBytes: number;
+  inactivityMs: number;
+  signal?: AbortSignal;
+}
+
+export interface RawFetchOptions {
   timeoutMs?: number;
+  deadlineMs?: number;
+  nowMs?: () => number;
   signal?: AbortSignal;
   extraHeaders?: Record<string, string>;
   websitePolicy?: WebsitePolicy | null;
+  maxBytes?: number;
+  maxPdfBytes?: number;
+  seams?: FetchSeams;
 }
 
 export interface RawFetchResult {
@@ -142,12 +182,12 @@ export function looksLikeHtml(body: string): boolean {
   return HTML_LEADING_RE.test(probe);
 }
 
-function looksLikeHtmlDocument(body: string): boolean {
+export function looksLikeHtmlDocument(body: string): boolean {
   const probe = body.replace(/^[ \t\n\r\f\v]+/, "").slice(0, 256).toLowerCase();
   return HTML_DOCUMENT_RE.test(probe);
 }
 
-function isTextCandidateContentType(contentType: string | null): boolean {
+export function isTextCandidateContentType(contentType: string | null): boolean {
   const match = /^[\w.+-]+\/[\w.+-]+/.exec(contentType ?? "");
   if (!match) return true;
   const ct = match[0].toLowerCase();
@@ -183,7 +223,7 @@ export function hasPdfMagic(data: Buffer): boolean {
   return head.length >= magic.length && head.subarray(0, magic.length).equals(magic);
 }
 
-function hasBinaryMagic(data: Buffer): boolean {
+export function hasBinaryMagic(data: Buffer): boolean {
   const head = magicHead(data);
   return BINARY_MAGICS.some((magic) =>
     head.length >= magic.length && head.subarray(0, magic.length).equals(magic),
@@ -295,12 +335,6 @@ function decodeWithCodec(bytes: Buffer, codec: string | null): string {
   }
 }
 
-interface ResolvedHost {
-  ok: boolean;
-  reason: string;
-  ip: string;
-  family: number;
-}
 
 async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promise<ResolvedHost> {
   let addresses: { address: string; family: number }[];
@@ -322,52 +356,58 @@ async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promi
 }
 
 
-function fetchBudgetExceeded(deadline: number | null, signal?: AbortSignal): string | null {
+function fetchBudgetExceeded(
+  deadline: number | null,
+  signal: AbortSignal | undefined,
+  now: () => number = Date.now,
+): string | null {
   if (signal?.aborted) return "Failed to fetch URL: cancelled.";
-  if (deadline !== null && Date.now() >= deadline) return "Failed to fetch URL: timed out.";
+  if (deadline !== null && now() >= deadline) return "Failed to fetch URL: timed out.";
   return null;
 }
 
-interface HopResponse {
-  status: number;
-  headers: http.IncomingHttpHeaders;
-  body: Buffer;
-}
 
-function requestHop(
-  url: URL,
-  pinnedIp: string,
-  family: number,
-  headers: Record<string, string>,
-  maxBytes: number,
-  inactivityMs: number,
-  signal?: AbortSignal,
-): Promise<HopResponse> {
+function requestHop(opts: HopOptions): Promise<HopResponse> {
   return new Promise((resolve, reject) => {
+    const url = opts.url;
     const transport = url.protocol === "https:" ? https : http;
     const options: https.RequestOptions = {
       method: "GET",
       host: url.hostname,
       port: url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80,
       path: url.pathname + url.search,
-      headers,
-      timeout: inactivityMs,
+      headers: opts.headers,
+      timeout: opts.inactivityMs,
       servername: url.protocol === "https:" ? url.hostname : undefined,
-      lookup: (_host, _opts, callback) => callback(null, [{ address: pinnedIp, family }]),
+      lookup: (_host, _opts, callback) =>
+        callback(null, [{ address: opts.pinnedIp, family: opts.family }]),
     };
     const request = transport.request(options, (res: IncomingMessage) => {
       const chunks: Buffer[] = [];
       let total = 0;
-      let limit = maxBytes;
+      let limit = opts.maxBytes;
+      let extendedForPdf = false;
       let done = false;
       const finish = (err: string | null, body: Buffer) => {
         if (done) return;
         done = true;
         if (err) reject(new Error(err));
-        else resolve({ status: res.statusCode ?? 0, headers: res.headers, body });
+        else
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers as Record<string, string | string[] | undefined>,
+            body,
+          });
       };
       res.on("data", (chunk: Buffer) => {
         if (done) return;
+        if (!extendedForPdf && total + chunk.length > opts.maxBytes) {
+          const contentType = String(res.headers["content-type"] ?? "").toLowerCase();
+          if (!contentType.includes("pdf") && hasPdfMagic(Buffer.concat(chunks))) {
+            limit = opts.maxPdfBytes;
+            extendedForPdf = true;
+          }
+        }
         const space = limit - total;
         if (space <= 0) {
           res.destroy();
@@ -388,7 +428,7 @@ function requestHop(
     request.on("timeout", () => request.destroy(new Error("timed out")));
     request.on("error", (err) => reject(err));
     const onAbort = () => request.destroy(new Error("cancelled"));
-    signal?.addEventListener("abort", onAbort, { once: true });
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
     request.end();
   });
 }
@@ -430,8 +470,15 @@ function decodePdfString(raw: string): string {
   return out;
 }
 
+export class PdfParseError extends Error {
+  constructor() {
+    super("pdf parse failed");
+  }
+}
+
 function pdfStreams(data: Buffer): Buffer[] {
   const text = data.toString("latin1");
+  if (/\/Encrypt\b/.test(text)) throw new PdfParseError();
   const streams: Buffer[] = [];
   const streamRe = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
   let match: RegExpExecArray | null;
@@ -451,29 +498,50 @@ function pdfStreams(data: Buffer): Buffer[] {
     }
     streams.push(bytes);
   }
+  if (!streams.length) throw new PdfParseError();
   return streams;
 }
 
 export function extractPdfText(data: Buffer): string {
   const streams = pdfStreams(data);
+  const totalPages = streams.length;
+  const pageLimitReached = totalPages > MAX_WEB_PDF_PAGES;
   const parts: string[] = [];
   let length = 0;
+  let textLimited = false;
   for (let index = 0; index < streams.length && index < MAX_WEB_PDF_PAGES; index++) {
-    const text = extractTextOps(streams[index]);
-    if (!text) continue;
-    const section = `## Page ${index + 1}\n\n${text}`;
+    const pageText = extractTextOps(streams[index]).trim();
+    if (!pageText) continue;
+    const section = `## Page ${index + 1}\n\n${pageText}`;
+    const piece = (parts.length ? "\n\n" : "") + section;
     const remaining = MAX_PAGE_CHARS - length;
-    if (remaining <= 0) break;
-    if (section.length <= remaining) {
-      parts.push(section);
-      length += section.length;
-    } else {
-      parts.push(section.slice(0, remaining) + "\n\n... (truncated)");
-      length = MAX_PAGE_CHARS;
+    if (piece.length > remaining) {
+      parts.push(piece.slice(0, remaining));
+      textLimited = true;
       break;
     }
+    parts.push(piece);
+    length += piece.length;
   }
-  return parts.join("\n\n");
+  let text = parts.join("").trimEnd();
+  if (!text) {
+    if (pageLimitReached) {
+      return `(PDF contains no extractable text in the first ${MAX_WEB_PDF_PAGES} pages)`;
+    }
+    return "";
+  }
+  const limits: string[] = [];
+  if (textLimited) {
+    limits.push(`text limited to ${MAX_PAGE_CHARS.toLocaleString("en-US")} characters`);
+  }
+  if (pageLimitReached) {
+    limits.push(`page processing capped at ${MAX_WEB_PDF_PAGES} pages`);
+  }
+  if (limits.length) {
+    const marker = `\n\n... (PDF extraction ${limits.join("; ")})`;
+    text = text.slice(0, MAX_PAGE_CHARS - marker.length).trimEnd() + marker;
+  }
+  return text;
 }
 
 function extractTextOps(bytes: Buffer): string {
@@ -567,15 +635,23 @@ export async function fetchUrlRaw(
   options: RawFetchOptions = {},
 ): Promise<RawFetchResult> {
   const timeoutMs = options.timeoutMs ?? 30_000;
+  const now = options.nowMs ?? Date.now;
+  const deadline = options.deadlineMs ?? now() + timeoutMs;
   const signal = options.signal;
-  const deadline = Date.now() + timeoutMs;
   const policy = options.websitePolicy ?? null;
+  const maxBytes = options.maxBytes ?? MAX_FETCH_BYTES;
+  const maxPdfBytes = options.maxPdfBytes ?? MAX_PDF_FETCH_BYTES;
+  const seams = options.seams ?? {};
+  const resolveHost = seams.resolve ?? resolveAndValidate;
+  const performRequest = seams.request ?? requestHop;
 
   url = normalizeUrlScheme(url);
   const [allowed, reason, hostname] = checkUrlAccess(url, policy);
   if (!allowed) return { error: reason, body: "", contentType: "" };
 
-  let resolved = await resolveAndValidate(hostname, signal);
+  let budgetError = fetchBudgetExceeded(deadline, signal, now);
+  if (budgetError !== null) return { error: budgetError, body: "", contentType: "" };
+  let resolved = await resolveHost(hostname, signal);
   if (!resolved.ok) return { error: resolved.reason, body: "", contentType: "" };
 
   let currentUrl = url;
@@ -584,7 +660,7 @@ export async function fetchUrlRaw(
   const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
-    const budgetError = fetchBudgetExceeded(deadline, signal);
+    budgetError = fetchBudgetExceeded(deadline, signal, now);
     if (budgetError !== null) return { error: budgetError, body: "", contentType: "" };
     const parsed = new URL(currentUrl);
     const hostHeader = parsed.hostname + (parsed.port ? `:${parsed.port}` : "");
@@ -594,22 +670,25 @@ export async function fetchUrlRaw(
       Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
     };
     if (options.extraHeaders) Object.assign(headers, options.extraHeaders);
-    const inactivity = Math.max(1, deadline - Date.now());
+    const inactivity = Math.max(1, deadline - now());
     let response: HopResponse;
     try {
-      response = await requestHop(
-        parsed,
+      response = await performRequest({
+        url: parsed,
         pinnedIp,
-        pinnedFamily,
+        family: pinnedFamily,
         headers,
-        MAX_FETCH_BYTES,
-        inactivity,
+        maxBytes,
+        maxPdfBytes,
+        inactivityMs: inactivity,
         signal,
-      );
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message === "cancelled") return { error: "Failed to fetch URL: cancelled.", body: "", contentType: "" };
-      if (message === "timed out") return { error: "Failed to fetch URL: timed out.", body: "", contentType: "" };
+      if (message === "cancelled")
+        return { error: "Failed to fetch URL: cancelled.", body: "", contentType: "" };
+      if (message === "timed out")
+        return { error: "Failed to fetch URL: timed out.", body: "", contentType: "" };
       return { error: `Failed to fetch URL: ${message}`, body: "", contentType: "" };
     }
 
@@ -621,31 +700,46 @@ export async function fetchUrlRaw(
           contentType: "",
         };
       }
-      const location = response.headers.location;
+      const rawLocation = response.headers.location;
+      const location = Array.isArray(rawLocation) ? rawLocation[0] : rawLocation;
       if (!location) {
-        return { error: "Failed to fetch URL: redirect missing Location header.", body: "", contentType: "" };
+        return {
+          error: "Failed to fetch URL: redirect missing Location header.",
+          body: "",
+          contentType: "",
+        };
       }
       currentUrl = new URL(location, currentUrl).toString();
-      const [redirectAllowed, redirectReason, redirectHost] = checkUrlAccess(currentUrl, policy);
+      const [redirectAllowed, redirectReason, redirectHost] = checkUrlAccess(
+        currentUrl,
+        policy,
+      );
       if (!redirectAllowed) return { error: redirectReason, body: "", contentType: "" };
-      const redirected = await resolveAndValidate(redirectHost, signal);
+      const redirected = await resolveHost(redirectHost, signal);
       if (!redirected.ok) return { error: redirected.reason, body: "", contentType: "" };
       pinnedIp = redirected.ip;
       pinnedFamily = redirected.family;
       continue;
     }
 
+    budgetError = fetchBudgetExceeded(deadline, signal, now);
+    if (budgetError !== null) return { error: budgetError, body: "", contentType: "" };
+
     const contentTypeHeader = response.headers["content-type"];
     const contentType = contentTypeHeader
-      ? (/^[\w.+-]+\/[\w.+-]+/.exec(contentTypeHeader.toLowerCase()) ?? [""])[0]
+      ? (/^[\w.+-]+\/[\w.+-]+/.exec(String(contentTypeHeader).toLowerCase()) ?? [""])[0]
       : "";
     const declaredCharset = contentTypeHeader
-      ? (/charset=([^;\s]+)/i.exec(contentTypeHeader)?.[1] ?? null)
+      ? (/charset=([^;\s]+)/i.exec(String(contentTypeHeader))?.[1] ?? null)
       : null;
 
     const declaredPdf = contentType === "application/pdf";
-    if (declaredPdf && response.body.length > MAX_PDF_FETCH_BYTES) {
-      return { error: "(PDF content exceeds the download limit; not readable as text)", body: "", contentType };
+    if (declaredPdf && response.body.length > maxPdfBytes) {
+      return {
+        error: "(PDF content exceeds the download limit; not readable as text)",
+        body: "",
+        contentType,
+      };
     }
     const isPdf = declaredPdf || hasPdfMagic(response.body);
     if (isPdf) {
@@ -655,6 +749,8 @@ export async function fetchUrlRaw(
       } catch {
         return { error: "(PDF content could not be read as text)", body: "", contentType };
       }
+      budgetError = fetchBudgetExceeded(deadline, signal, now);
+      if (budgetError !== null) return { error: budgetError, body: "", contentType };
       if (!pdfText) pdfText = "(PDF contains no extractable text)";
       return { error: null, body: pdfText, contentType: "application/pdf" };
     }
@@ -733,10 +829,12 @@ export async function fetchPageText(
   options: FetchPageOptions = {},
 ): Promise<string> {
   const timeoutMs = options.timeoutMs ?? 60_000;
+  const now = options.nowMs ?? Date.now;
+  const deadlineMs = options.deadlineMs ?? now() + timeoutMs;
   const signal = options.signal;
-  const deadline = Date.now() + timeoutMs;
   const policy = options.websitePolicy ?? null;
   const maxChars = options.maxChars ?? MAX_PAGE_CHARS;
+  const rawFetch = options.rawFetch ?? fetchUrlRaw;
 
   url = normalizeUrlScheme(url);
   const [allowed, reason] = checkUrlAccess(url, policy);
@@ -744,10 +842,13 @@ export async function fetchPageText(
 
   const readmeApiUrl = githubRepoReadmeApiUrl(url);
   if (readmeApiUrl) {
-    const readmeResult = await fetchUrlRaw(readmeApiUrl, {
-      timeoutMs: Math.max(1, deadline - Date.now()),
+    const readmeResult = await rawFetch(readmeApiUrl, {
+      deadlineMs,
       signal,
       websitePolicy: policy,
+      maxBytes: options.maxBytes,
+      maxPdfBytes: options.maxPdfBytes,
+      seams: options.seams,
       extraHeaders: {
         Accept: "application/vnd.github.raw+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -768,10 +869,13 @@ export async function fetchPageText(
     }
   }
 
-  const result = await fetchUrlRaw(url, {
-    timeoutMs: Math.max(1, deadline - Date.now()),
+  const result = await rawFetch(url, {
+    deadlineMs,
     signal,
     websitePolicy: policy,
+    maxBytes: options.maxBytes,
+    maxPdfBytes: options.maxPdfBytes,
+    seams: options.seams,
   });
   if (result.error !== null) return result.error;
 

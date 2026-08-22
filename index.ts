@@ -1,12 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import {
-  ddgSearch,
-  EMPTY_SEARCH_RESULTS,
-  formatSearchResults,
-  searchFailureMessage,
-  type SearchResult,
-} from "./web-search.ts";
+import { webSearch } from "./web-search.ts";
 import { fetchPageText } from "./web-fetch.ts";
 
 const FETCH_TIMEOUT_MS = 60_000;
@@ -61,18 +55,8 @@ export default function (pi: ExtensionAPI) {
           details: {},
         };
       }
-      if (!params.query?.trim()) {
-        return { content: [{ type: "text", text: "No query provided." }], details: {} };
-      }
-      try {
-        const results: SearchResult[] = await ddgSearch(params.query, signal ?? undefined);
-        if (!results.length) {
-          return { content: [{ type: "text", text: EMPTY_SEARCH_RESULTS[0] }], details: {} };
-        }
-        return { content: [{ type: "text", text: formatSearchResults(results) }], details: {} };
-      } catch (err) {
-        return { content: [{ type: "text", text: searchFailureMessage(err) }], details: {} };
-      }
+      const text = await webSearch(params.query, { signal: signal ?? undefined });
+      return { content: [{ type: "text", text }], details: {} };
     },
   });
 

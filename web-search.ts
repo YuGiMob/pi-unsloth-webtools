@@ -1,4 +1,5 @@
 import { decodeHtmlEntities } from "./html-to-md.ts";
+import { checkUrlAccess, scopeSearchQuery, type WebsitePolicy } from "./web-access.ts";
 
 const SEARCH_URL = "https://html.duckduckgo.com/html/";
 const SEARCH_TIMEOUT_MS = 20_000;
@@ -31,8 +32,15 @@ function stripTags(text: string): string {
 }
 
 
+export type SearchClient = (
+  query: string,
+  maxResults: number,
+  signal?: AbortSignal,
+) => Promise<SearchResult[]>;
+
 export async function ddgSearch(
   query: string,
+  maxResults = MAX_RESULTS,
   signal?: AbortSignal,
 ): Promise<SearchResult[]> {
   const controller = new AbortController();
@@ -62,7 +70,7 @@ export async function ddgSearch(
     const seen = new Set<string>();
     const anchors = [...html.matchAll(RESULT_ANCHOR_RE)];
     for (const anchor of anchors) {
-      if (results.length >= MAX_RESULTS) break;
+      if (results.length >= maxResults) break;
       const href = decodeDdgHref(anchor[1]);
       if (seen.has(href)) continue;
       seen.add(href);
@@ -104,6 +112,12 @@ export class RateLimitError extends Error {
   }
 }
 
+export class EmptySweepError extends Error {
+  constructor() {
+    super("No results found");
+  }
+}
+
 export class SearchCancelled extends Error {
   constructor() {
     super("cancelled");
@@ -116,7 +130,60 @@ export class SearchTimeoutError extends Error {
   }
 }
 
-export function searchFailureMessage(exc: unknown): string {
+const POLICY_OVERFETCH = 4;
+
+export interface WebSearchOptions {
+  maxResults?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  websitePolicy?: WebsitePolicy | null;
+  client?: SearchClient;
+}
+
+export async function webSearch(
+  query: string | undefined,
+  options: WebSearchOptions = {},
+): Promise<string> {
+  const maxResults = options.maxResults ?? 5;
+  const timeoutMs = options.timeoutMs ?? SEARCH_TIMEOUT_MS;
+  const signal = options.signal;
+  const policy = options.websitePolicy ?? null;
+  const client = options.client ?? ddgSearch;
+
+  if (!query || !query.trim()) return "No query provided.";
+  if (signal?.aborted) return "Search cancelled.";
+  try {
+    const effectiveQuery = scopeSearchQuery(query, policy);
+    const restricted = Boolean(
+      (policy?.allowedDomains?.length ?? 0) > 0 ||
+      (policy?.blockedDomains?.length ?? 0) > 0,
+    );
+    const wanted = restricted ? maxResults * POLICY_OVERFETCH : maxResults;
+    const results = await client(effectiveQuery, wanted, signal);
+    if (signal?.aborted) return "Search cancelled.";
+    if (!results.length) return EMPTY_SEARCH_RESULTS[0];
+    const parts: string[] = [];
+    for (const result of results) {
+      if (parts.length >= maxResults) break;
+      const href = String(result.href ?? "").trim();
+      if (href && !checkUrlAccess(href, policy)[0]) continue;
+      const title = String(result.title ?? "").replace(/\s+/g, " ");
+      const snippet = String(result.body ?? "").replace(/\s+/g, " ");
+      parts.push(`Title: ${title}\nURL: ${href}\nSnippet: ${snippet}`);
+    }
+    if (!parts.length) return EMPTY_SEARCH_RESULTS[1];
+    const text = parts.join("\n\n---\n\n");
+    return (
+      text +
+      "\n\n---\n\nIMPORTANT: These are only short snippets. " +
+      'To get the full page content, call web_search with the url parameter (e.g. {"url": "<URL>"}).'
+    );
+  } catch (err) {
+    return searchFailureMessage(err, timeoutMs);
+  }
+}
+
+export function searchFailureMessage(exc: unknown, timeoutMs = SEARCH_TIMEOUT_MS): string {
   if (exc instanceof RateLimitError) {
     return (
       "Search failed: the search engines are rate limiting this machine. Wait a minute " +
@@ -125,7 +192,10 @@ export function searchFailureMessage(exc: unknown): string {
   }
   if (exc instanceof SearchCancelled) return "Search cancelled.";
   if (exc instanceof SearchTimeoutError) {
-    return `Search failed: the search engines did not respond within ${SEARCH_TIMEOUT_MS / 1000}s.`;
+    return `Search failed: the search engines did not respond within ${Math.round(timeoutMs / 1000)}s.`;
+  }
+  if (exc instanceof EmptySweepError || (exc instanceof Error && exc.message.includes("No results found"))) {
+    return EMPTY_SEARCH_RESULTS[0];
   }
   return `Search failed: ${exc instanceof Error ? exc.message : String(exc)}`;
 }
