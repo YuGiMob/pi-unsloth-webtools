@@ -86,7 +86,7 @@ describe("pdf handling", () => {
   it("caps pdf pages without a character budget", async () => {
     const pages = Array.from({ length: 60 }, () => Array.from({ length: 30 }, () => "x".repeat(100)));
     const out = await fetchWith(makePdf(pages), "application/pdf");
-    expect(out).toContain("page processing capped at 50 pages");
+    expect(out).toContain("PDF extraction is capped at 50 pages");
     expect(out).not.toContain("text limited");
     expect(out.split("## Page").length - 1).toBe(50);
   });
@@ -94,7 +94,7 @@ describe("pdf handling", () => {
   it("does not mark a pdf at exactly the page cap", async () => {
     const pages = Array.from({ length: 50 }, () => "short");
     const out = await fetchWith(makePdf(pages), "application/pdf");
-    expect(out).not.toContain("page processing capped");
+    expect(out).not.toContain("extraction is capped");
     expect(out).toContain("## Page 50\n\nshort");
   });
 

@@ -39,13 +39,13 @@ describe("checkUrlAccess", () => {
   it("rejects empty urls", () => {
     const [allowed, reason] = checkUrlAccess("", null);
     expect(allowed).toBe(false);
-    expect(reason).toBe("Blocked: URL is empty.");
+    expect(reason).toBe("Blocked: the URL is empty.");
   });
 
   it("rejects invalid characters", () => {
     const [allowed, reason] = checkUrlAccess("https://exa mple.com", null);
     expect(allowed).toBe(false);
-    expect(reason).toBe("Blocked: URL contains invalid characters.");
+    expect(reason).toBe("Blocked: the URL contains invalid characters.");
     const [allowed2] = checkUrlAccess("https://example.com\\evil", null);
     expect(allowed2).toBe(false);
   });
@@ -59,7 +59,7 @@ describe("checkUrlAccess", () => {
   it("rejects credentials and encoded hosts", () => {
     const [allowed, reason] = checkUrlAccess("https://user:pass@example.com", null);
     expect(allowed).toBe(false);
-    expect(reason).toBe("Blocked: URL credentials or encoded hostnames are not allowed.");
+    expect(reason).toBe("Blocked: URLs with credentials or encoded hostnames are not allowed.");
   });
 
   it("accepts plain https urls", () => {

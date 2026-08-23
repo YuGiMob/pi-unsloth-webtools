@@ -62,12 +62,12 @@ export default function (pi: ExtensionAPI) {
     name: "web_fetch",
     label: "Web Fetch",
     description:
-      "Fetch a URL and return readable text content. HTML responses are converted to Markdown " +
-      "with a main-content heuristic (article/main scoping, hidden-element and boilerplate " +
-      "stripping); non-HTML text responses are returned as-is. GitHub repo root pages are " +
-      "rewritten to the README API so the model reads the README instead of the repo page's UI " +
-      "chrome. Blocks private/loopback/link-local targets (SSRF protection) and caps the " +
-      "download size.",
+      "Fetch a URL and return its readable text. HTML pages are converted to Markdown using a " +
+      "main-content heuristic: article/main scoping plus hidden-element and boilerplate " +
+      "stripping. Non-HTML text is returned as-is. GitHub repo root pages are rewritten to the " +
+      "README API, so the README is returned instead of the repo page's UI chrome. " +
+      "Private/loopback/link-local targets are blocked (SSRF protection), and the download size " +
+      "is capped.",
     promptSnippet: "Fetch a web page and return readable text content",
     parameters: WebFetchParams,
     async execute(_toolCallId, params, signal, _onUpdate, _ctx) {

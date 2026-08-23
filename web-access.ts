@@ -173,46 +173,46 @@ export function checkUrlAccess(
   policy: WebsitePolicy | null,
 ): [boolean, string, string] {
   if (typeof url !== "string" || !url.trim()) {
-    return [false, "Blocked: URL is empty.", ""];
+    return [false, "Blocked: the URL is empty.", ""];
   }
   const candidate = url.trim();
   if (
     Array.from(candidate).some((char) => /\s/.test(char) || char.charCodeAt(0) < 32) ||
     candidate.includes("\\")
   ) {
-    return [false, "Blocked: URL contains invalid characters.", ""];
+    return [false, "Blocked: the URL contains invalid characters.", ""];
   }
   let parsed: URL;
   try {
     parsed = new URL(candidate);
   } catch {
-    return [false, "Blocked: URL has an invalid hostname or port.", ""];
+    return [false, "Blocked: the URL has an invalid hostname or port.", ""];
   }
   const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
   if (scheme !== "http" && scheme !== "https") {
     return [false, "Blocked: only http/https URLs are allowed.", ""];
   }
   if (parsed.username || parsed.password || parsed.hostname.includes("%")) {
-    return [false, "Blocked: URL credentials or encoded hostnames are not allowed.", ""];
+    return [false, "Blocked: URLs with credentials or encoded hostnames are not allowed.", ""];
   }
   if (!parsed.hostname) {
-    return [false, "Blocked: URL has an invalid hostname or port.", ""];
+    return [false, "Blocked: the URL has an invalid hostname or port.", ""];
   }
   try {
     if (parsed.port && !(PORT_RE.test(parsed.port) && Number(parsed.port) >= 1 && Number(parsed.port) <= 65535)) {
-      return [false, "Blocked: URL has an invalid hostname or port.", ""];
+      return [false, "Blocked: the URL has an invalid hostname or port.", ""];
     }
   } catch {
-    return [false, "Blocked: URL has an invalid hostname or port.", ""];
+    return [false, "Blocked: the URL has an invalid hostname or port.", ""];
   }
   let hostname: string;
   try {
     hostname = normalizeDomain(parsed.hostname);
   } catch {
-    return [false, "Blocked: URL has an invalid hostname or port.", ""];
+    return [false, "Blocked: the URL has an invalid hostname or port.", ""];
   }
   if (!hostnameAllowed(hostname, policy)) {
-    return [false, `Blocked: website access policy disallows ${hostname}.`, hostname];
+    return [false, `Blocked: the website access policy disallows ${hostname}.`, hostname];
   }
   return [true, "", hostname];
 }

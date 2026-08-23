@@ -421,7 +421,7 @@ async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promi
   }
   for (const entry of addresses) {
     if (!isPublicIp(entry.address)) {
-      return { ok: false, reason: `Blocked: refusing to fetch non-public address ${entry.address}.`, ip: "", family: 0 };
+      return { ok: false, reason: `Blocked: refusing to fetch the non-public address ${entry.address}.`, ip: "", family: 0 };
     }
   }
   const first = addresses[0];
@@ -590,7 +590,7 @@ export async function fetchUrlRaw(
       const location = Array.isArray(rawLocation) ? rawLocation[0] : rawLocation;
       if (!location) {
         return {
-          error: "Failed to fetch URL: redirect missing Location header.",
+          error: "Failed to fetch URL: the redirect is missing a Location header.",
           body: "",
           contentType: "",
         };

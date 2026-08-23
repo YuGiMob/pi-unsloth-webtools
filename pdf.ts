@@ -527,7 +527,7 @@ function assemblePages(
     return "";
   }
   if (pageLimitReached) {
-    text += `\n\n... (PDF extraction page processing capped at ${MAX_WEB_PDF_PAGES} pages)`;
+    text += `\n\n... (PDF extraction is capped at ${MAX_WEB_PDF_PAGES} pages)`;
   }
   return text;
 }

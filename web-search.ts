@@ -82,7 +82,7 @@ export async function webSearch(
 export function searchFailureMessage(exc: unknown, timeoutMs = SEARCH_TIMEOUT_MS): string {
   if (exc instanceof SearchCancelled) return "Search cancelled.";
   if (exc instanceof SearchTimeoutError) {
-    return `Search failed: the search engines did not respond within ${Math.round(timeoutMs / 1000)}s.`;
+    return `Search failed: the search engines did not respond within ${Math.round(timeoutMs / 1000)} seconds.`;
   }
   if (exc instanceof EmptySweepError || (exc instanceof Error && exc.message.includes("No results found"))) {
     return EMPTY_SEARCH_RESULTS[0];
@@ -100,7 +100,7 @@ export function formatSearchResults(results: SearchResult[]): string {
   const text = parts.join("\n\n---\n\n");
   return (
     text +
-    "\n\n---\n\nIMPORTANT: These are only short snippets. " +
+    "\n\n---\n\nThese are only short snippets. " +
     'To get the full page content, call web_search with the url parameter (e.g. {"url": "<URL>"}).'
   );
 }

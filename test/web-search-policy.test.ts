@@ -132,7 +132,7 @@ describe("web_search policy behavior", () => {
       throw new SearchTimeoutError();
     });
     const result = await webSearch("q", { timeoutMs: 7_000, client });
-    expect(result).toBe("Search failed: the search engines did not respond within 7s.");
+    expect(result).toBe("Search failed: the search engines did not respond within 7 seconds.");
   });
 
   it("reports an empty sweep as no results, not a failure", async () => {
@@ -182,7 +182,7 @@ describe("direct fetch policy enforcement", () => {
         },
       },
     });
-    expect(out).toContain("Blocked: website access policy");
+    expect(out).toContain("Blocked: the website access policy");
     expect(resolved).toEqual([]);
   });
 
@@ -202,7 +202,7 @@ describe("direct fetch policy enforcement", () => {
         }),
       },
     });
-    expect(out).toContain("Blocked: website access policy disallows example.com");
+    expect(out).toContain("Blocked: the website access policy disallows example.com");
     expect(resolved).toEqual(["arxiv.org"]);
   });
 });
