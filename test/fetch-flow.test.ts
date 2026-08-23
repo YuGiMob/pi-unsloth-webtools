@@ -419,6 +419,23 @@ describe("non-followed redirect statuses", () => {
   });
 });
 
+describe("request headers", () => {
+  it("requests identity content-encoding", async () => {
+    let seen: Record<string, string> = {};
+    const result = await fetchUrlRaw("https://example.com/", {
+      seams: {
+        resolve: async () => ({ ok: true, reason: "", ip: "203.0.113.7", family: 4 }),
+        request: async (opts) => {
+          seen = opts.headers;
+          return { status: 200, headers: {}, body: Buffer.from("hello") };
+        },
+      },
+    });
+    expect(result.error).toBeNull();
+    expect(seen["Accept-Encoding"]).toBe("identity");
+  });
+});
+
 function seamSearch(body: Buffer, contentType: string | null) {
   return seamWithResponseBody(body, contentType);
 }

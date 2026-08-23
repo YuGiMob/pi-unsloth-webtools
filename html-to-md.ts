@@ -197,7 +197,7 @@ export function decodeHtmlEntities(text: string): string {
   return text.replace(CHARREF_RE, (whole, s: string) => {
     if (s[0] === "#") {
       const hex = s[1] === "x" || s[1] === "X";
-      const num = parseInt(s.slice(2).replace(/;+$/, ""), hex ? 16 : 10);
+      const num = parseInt(s.slice(hex ? 2 : 1).replace(/;+$/, ""), hex ? 16 : 10);
       const mapped = INVALID_CHARREFS[num];
       if (mapped !== undefined) return mapped;
       if ((num >= 0xd800 && num <= 0xdfff) || num > 0x10ffff) return "\ufffd";

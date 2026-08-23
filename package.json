@@ -31,7 +31,6 @@
     "entities.ts",
     "pdf.ts",
     "README.md",
-    "ROADMAP.md",
     "LICENSE"
   ],
   "pi": {
@@ -48,8 +47,10 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:unit": "vitest run --exclude **/smoke.test.ts",
+    "test:smoke": "vitest run test/smoke.test.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck"
+    "prepublishOnly": "npm run typecheck && npm run test:unit"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.0",

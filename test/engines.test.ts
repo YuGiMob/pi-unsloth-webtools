@@ -200,6 +200,32 @@ describe("wikipedia engine", () => {
     await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(SearchTimeoutError);
   });
 
+  it("reports a timeout when the first engine times out amid later failures", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        if (calls === 1) throw new DOMException("The operation timed out.", "TimeoutError");
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(SearchTimeoutError);
+  });
+
+  it("reports a timeout when a later engine times out after generic failures", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        if (calls === 2) throw new DOMException("The operation timed out.", "TimeoutError");
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(SearchTimeoutError);
+  });
+
   it("returns no results when every engine fails without timing out", async () => {
     vi.stubGlobal(
       "fetch",

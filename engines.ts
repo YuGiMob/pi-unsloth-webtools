@@ -822,7 +822,7 @@ export async function autoTextSearch(
   const seenProviders = new Set<string>();
   const aggregator = new ResultsAggregator();
   const ctx: EngineContext = { region: "us-en", safesearch: "moderate" };
-  let err: unknown = null;
+  let timedOut = false;
   const uniqueProviders = new Set(engines.map((e) => e.provider)).size;
   const maxWorkers = Math.min(uniqueProviders, Math.ceil(maxResults / 10) + 1);
   let i = 0;
@@ -835,7 +835,7 @@ export async function autoTextSearch(
         seenProviders.add(engine.provider);
       }
     } catch (e) {
-      err = e;
+      if (e instanceof Error && e.message.includes("timed out")) timedOut = true;
     }
   };
   while (i < engines.length) {
@@ -850,6 +850,6 @@ export async function autoTextSearch(
   }
   const results = rankResults(aggregator.extractDicts(), query);
   if (results.length) return results.slice(0, maxResults);
-  if (err instanceof Error && err.message.includes("timed out")) throw new SearchTimeoutError();
+  if (timedOut) throw new SearchTimeoutError();
   throw new EmptySweepError();
 }

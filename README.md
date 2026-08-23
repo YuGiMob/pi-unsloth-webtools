@@ -53,8 +53,8 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   pymupdf4llm-style markdown layer (headings, bold/italic, code fences, links, tables)
   with Studio's corrupted/incomplete fallback to plain text.
 - Content sniffing: MIME allow/deny, binary magic signatures, PDF magic detection, and charset
-  decoding (declared charset, BOM sniffing for UTF-8/16/32, cp1252 rescue for mislabeled
-  single-byte pages).
+  decoding (declared charset, BOM sniffing for UTF-8/16/32, `<meta charset>` sniffing for
+  CJK and Windows/ISO encodings, cp1252 rescue for mislabeled single-byte pages).
 - HTML → Markdown conversion ported from Studio's dependency-free `_html_to_md.py`: headings,
   links, emphasis, lists, tables, blockquotes, code fences, entity decoding; hidden-element
   stripping (`hidden`, `aria-hidden`, inline styles); `<article>`/`<main>` main-content scoping
@@ -65,8 +65,22 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 - HTML entity decoding replicates CPython's `html.unescape` (full 2,231-entry HTML5 table,
   longest-prefix rule, Windows-1252 numeric mappings), matching Studio byte-for-byte.
 
-See `ROADMAP.md` for the remaining gaps (per-line styling, table detection, TLS
-fingerprinting, proxies).
+## Known differences from Studio
+
+- **PDF styling**: MuPDF.js exposes one font per line, so mixed-style lines style the
+  whole line instead of per-span; superscript/subscript/underline/strikeout/highlight
+  markers are not emitted. Tables use a conservative text-grid detector — aligned text
+  tables are detected, drawn-rule-only tables are not.
+- **Search engines**: Node's `fetch` TLS fingerprint differs from ddgs's `primp`
+  impersonation, so Google/Brave/Yahoo/Yandex may block or serve consent pages more
+  aggressively (a blocked engine simply contributes no results). User agents are a
+  fixed browser set plus ddgs's Android Google UA generator, not `fake_useragent`'s
+  database.
+- **Empty sweeps**: ddgs 9.14.4 raises the last engine exception; this port reports a
+  timeout whenever any engine timed out, so the timeout message is not masked by later
+  generic engine failures.
+- **Proxies**: Studio routes through environment proxies; this port always connects
+  directly with DNS pinning (deliberately out of scope).
 
 ## Development
 
@@ -74,9 +88,14 @@ fingerprinting, proxies).
 npm install
 npm run typecheck
 npm test
+npm run test:unit
+npm run test:smoke
 ```
 
 ## Tests
+
+`npm test` runs the full suite. `npm run test:unit` skips the live-network smoke tests,
+and `npm run test:smoke` runs only those.
 
 The suite ports Unsloth Studio's own tests for these tools:
 
@@ -94,6 +113,8 @@ The suite ports Unsloth Studio's own tests for these tools:
   aggregator, the ranker, and the Wikipedia engine with a stubbed fetch
 - `test/pdf-parity.test.ts` — MuPDF engine capabilities: PDF 1.5 object streams,
   ASCII85Decode, font `/Differences` encodings, pymupdf4llm-style headings/links/tables
+- `test/entities.test.ts` — `decodeHtmlEntities` parity with CPython `html.unescape`: legacy
+  refs, longest-prefix rule, Windows-1252 numeric mappings, invalid codepoints
 - `test/smoke.test.ts` — live network checks against real hosts
 
 The seams (`seams.resolve` / `seams.request` / `rawFetch`) replace the network stack

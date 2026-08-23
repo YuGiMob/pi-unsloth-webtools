@@ -288,6 +288,57 @@ describe("binary sniffing", () => {
     expect(out).toContain("Real article text.");
     expect(out).not.toContain("binary content");
   });
+
+  it("decodes a meta-declared charset when the header declares none", async () => {
+    const body = Buffer.concat([
+      Buffer.from('<html><head><meta charset="gbk"></head><body><p>', "latin1"),
+      Buffer.from([0xd6, 0xd0]),
+      Buffer.from("</p></body></html>", "latin1"),
+    ]);
+    const out = await fetchWith(body, "text/html");
+    expect(out).toContain("中");
+    expect(out).not.toContain("binary content");
+  });
+
+  it("ignores unknown meta charsets and falls back to utf-8", async () => {
+    const body = Buffer.from(
+      '<html><head><meta charset="x-made-up-codec"></head><body><p>plain text</p></body></html>',
+    );
+    const out = await fetchWith(body, "text/html");
+    expect(out).toContain("plain text");
+  });
+
+  it("does not honor meta charset on non-html bodies", async () => {
+    const body = Buffer.from('<meta charset="gbk">\n你好，世界\n', "utf8");
+    const out = await fetchWith(body, "text/plain");
+    expect(out).toContain("你好，世界");
+    expect(out).not.toContain("binary content");
+  });
+
+  it("decodes a charset from the meta http-equiv content form", async () => {
+    const body = Buffer.concat([
+      Buffer.from(
+        '<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=gbk\"></head><body><p>',
+        "latin1",
+      ),
+      Buffer.from([0xd6, 0xd0]),
+      Buffer.from("</p></body></html>", "latin1"),
+    ]);
+    const out = await fetchWith(body, "text/html");
+    expect(out).toContain("中");
+    expect(out).not.toContain("binary content");
+  });
+
+  it("decodes tis-620 thai text from a meta charset", async () => {
+    const body = Buffer.concat([
+      Buffer.from('<html><head><meta charset=\"tis-620\"></head><body><p>', "latin1"),
+      Buffer.from([0xe4, 0xb7, 0xc2]),
+      Buffer.from("</p></body></html>", "latin1"),
+    ]);
+    const out = await fetchWith(body, "text/html");
+    expect(out).toContain("ไทย");
+    expect(out).not.toContain("binary content");
+  });
 });
 
 function encodeUtf32(text: string, littleEndian: boolean): Buffer {

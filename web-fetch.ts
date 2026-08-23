@@ -237,6 +237,34 @@ function hasSingleByteTextEvidence(data: Buffer): boolean {
   return ascii / data.length >= MIN_SINGLE_BYTE_ASCII_RATIO;
 }
 
+const CHARSET_ALIASES: Record<string, string> = {
+  gbk: "gbk",
+  gb2312: "gbk",
+  "gb-2312": "gbk",
+  cp936: "gbk",
+  "x-gbk": "gbk",
+  gb18030: "gb18030",
+  big5: "big5",
+  "big5-hkscs": "big5",
+  sjis: "shift_jis",
+  "x-sjis": "shift_jis",
+  cp932: "shift_jis",
+  "shift-jis": "shift_jis",
+  "euc-jp": "euc-jp",
+  "euc-kr": "euc-kr",
+  ksc5601: "euc-kr",
+  "ks_c_5601-1987": "euc-kr",
+  "ks_c_5601-1989": "euc-kr",
+  "iso-2022-jp": "iso-2022-jp",
+  "koi8-r": "koi8-r",
+  "koi8-u": "koi8-u",
+  cp866: "cp866",
+  "x-mac-cyrillic": "x-mac-cyrillic",
+  "windows-874": "windows-874",
+  cp874: "windows-874",
+  "tis-620": "tis-620",
+};
+
 function normalizeCharset(name: string): string | null {
   const n = name.trim().replace(/["']/g, "").toLowerCase();
   switch (n) {
@@ -270,8 +298,28 @@ function normalizeCharset(name: string): string | null {
     case "utf-32be":
       return "utf-32be";
     default:
-      return null;
+      break;
   }
+  const alias = CHARSET_ALIASES[n];
+  if (alias !== undefined) return alias;
+  if (/^windows-125[0-8]$/.test(n) || /^iso-8859-(?:[2-9]|1[0-6])$/.test(n)) return n;
+  return null;
+}
+
+function sniffMetaCharset(bytes: Buffer): string | null {
+  const head = bytes.subarray(0, 1024).toString("latin1").toLowerCase();
+  const match =
+    /<meta\b[^>]*\bcharset\s*=\s*["']?\s*([a-z0-9_.\-]+)/.exec(head) ??
+    /<meta\b[^>]*\bhttp-equiv\s*=\s*["']?content-type["']?[^>]*\bcharset\s*=\s*["']?\s*([a-z0-9_.\-]+)/.exec(head);
+  return match ? normalizeCharset(match[1]) : null;
+}
+
+function sniffMetaCharsetForHtml(bytes: Buffer, contentType: string): string | null {
+  if (!contentType.includes("html")) {
+    const probe = bytes.subarray(0, 256).toString("latin1");
+    if (!looksLikeHtmlDocument(probe)) return null;
+  }
+  return sniffMetaCharset(bytes);
 }
 
 function decodeUtf32(bytes: Buffer, littleEndian: boolean): string {
@@ -328,9 +376,36 @@ function decodeWithCodec(bytes: Buffer, codec: string | null): string {
     case "cp1252":
       return decodeSingleByte(bytes, true);
     case "iso8859-1":
-    default:
       return decodeSingleByte(bytes, false);
+    default:
+      return decodeWithLabel(bytes, codec);
   }
+}
+
+function decodeWithLabel(bytes: Buffer, label: string | null): string {
+  if (label === null) return decodeSingleByte(bytes, false);
+  if (label === "tis-620") return decodeTis620(bytes);
+  try {
+    return new TextDecoder(label, { fatal: false }).decode(bytes);
+  } catch {
+    return decodeSingleByte(bytes, false);
+  }
+}
+
+function decodeTis620(bytes: Buffer): string {
+  let out = "";
+  for (const byte of bytes) {
+    if (byte < 0x80) {
+      out += String.fromCharCode(byte);
+    } else if (byte >= 0xa1 && byte <= 0xfb) {
+      out += String.fromCodePoint(0x0e01 + byte - 0xa1);
+    } else if (byte === 0xa0) {
+      out += "\u00a0";
+    } else {
+      out += "\ufffd";
+    }
+  }
+  return out;
 }
 
 
@@ -477,6 +552,7 @@ export async function fetchUrlRaw(
       "User-Agent": userAgent,
       Host: hostHeader,
       Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
+      "Accept-Encoding": "identity",
     };
     if (options.extraHeaders) Object.assign(headers, options.extraHeaders);
     const inactivity = Math.max(1, deadline - now());
@@ -584,7 +660,10 @@ export async function fetchUrlRaw(
 
     const declaredCodec = declaredCharset ? normalizeCharset(declaredCharset) : null;
     const bomCodec = bomCodecFor(response.body);
-    const rawHtml = decodeWithCodec(response.body, declaredCodec ?? bomCodec ?? "utf-8");
+    const rawHtml = decodeWithCodec(
+      response.body,
+      declaredCodec ?? bomCodec ?? sniffMetaCharsetForHtml(response.body, contentType) ?? "utf-8",
+    );
 
     if (looksBinary(rawHtml)) {
       let alt: string | null = null;
