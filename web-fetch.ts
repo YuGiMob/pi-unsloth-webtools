@@ -11,20 +11,11 @@ import {
 } from "./web-access.ts";
 import { htmlToMarkdown } from "./html-to-md.ts";
 import { extractPdfText, PdfParseError } from "./pdf.ts";
+import { randomUserAgent } from "./user-agents.ts";
 
-const MIN_PAGE_CHARS = 2000;
 const MAX_FETCH_BYTES = 512 * 1024;
 const MAX_PDF_FETCH_BYTES = 10 * 1024 * 1024;
-const MAX_REDIRECTS = 5;
-
-const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15",
-];
+const MAX_REQUESTS = 5;
 
 const UTF32_LE_BOM = Buffer.from([0xff, 0xfe, 0x00, 0x00]);
 const UTF32_BE_BOM = Buffer.from([0x00, 0x00, 0xfe, 0xff]);
@@ -541,9 +532,9 @@ export async function fetchUrlRaw(
   let currentUrl = url;
   let pinnedIp = resolved.ip;
   let pinnedFamily = resolved.family;
-  const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+  const userAgent = randomUserAgent();
 
-  for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
+  for (let hop = 0; hop < MAX_REQUESTS; hop++) {
     budgetError = fetchBudgetExceeded(deadline, signal, now);
     if (budgetError !== null) return { error: budgetError, body: "", contentType: "" };
     const parsed = new URL(currentUrl);
@@ -595,7 +586,11 @@ export async function fetchUrlRaw(
           contentType: "",
         };
       }
-      currentUrl = new URL(location, currentUrl).toString();
+      try {
+        currentUrl = new URL(location, currentUrl).toString();
+      } catch {
+        return { error: "Failed to fetch URL: the redirect has an invalid Location.", body: "", contentType: "" };
+      }
       const [redirectAllowed, redirectReason, redirectHost] = checkUrlAccess(
         currentUrl,
         policy,

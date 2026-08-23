@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { decodeHtmlEntities, feedHtml } from "./html-to-md.ts";
 import type { AttrDict } from "./html-to-md.ts";
+import { randomUserAgent } from "./user-agents.ts";
 export class EmptySweepError extends Error {
   constructor() {
     super("No results found");
@@ -110,6 +111,32 @@ interface XStep {
   preds: Pred[];
   terminal?: "text" | string;
 }
+function parsePredicateBlocks(input: string, start: number): { preds: Pred[]; next: number } {
+  const preds: Pred[] = [];
+  let pos = start;
+  while (pos < input.length && input[pos] === "[") {
+    const innerStart = pos + 1;
+    let depth = 1;
+    let quote: string | null = null;
+    let j = innerStart;
+    while (j < input.length && depth) {
+      const c = input[j];
+      if (quote !== null) {
+        if (c === quote) quote = null;
+      } else if (c === "'" || c === '"') {
+        quote = c;
+      } else if (c === "[") {
+        depth++;
+      } else if (c === "]") {
+        depth--;
+      }
+      j++;
+    }
+    preds.push(parsePredExpr(input.slice(innerStart, j - 1)));
+    pos = j;
+  }
+  return { preds, next: pos };
+}
 
 function parsePredExpr(input: string): Pred {
   let pos = 0;
@@ -173,34 +200,9 @@ function parsePredExpr(input: string): Pred {
       return { op: "desc", tag: name };
     }
     const name = word();
-    const preds = parsePredBlocks();
+    const { preds, next } = parsePredicateBlocks(input, pos);
+    pos = next;
     return { op: "child", tag: name, preds };
-  };
-  const parsePredBlocks = (): Pred[] => {
-    const preds: Pred[] = [];
-    while (pos < input.length && input[pos] === "[") {
-      const start = pos + 1;
-      let depth = 1;
-      let quote: string | null = null;
-      let i = start;
-      while (i < input.length && depth) {
-        const c = input[i];
-        if (quote !== null) {
-          if (c === quote) quote = null;
-        } else if (c === "'" || c === '"') {
-          quote = c;
-        } else if (c === "[") {
-          depth++;
-        } else if (c === "]") {
-          depth--;
-        }
-        i++;
-      }
-      const inner = input.slice(start, i - 1);
-      preds.push(parsePredExpr(inner));
-      pos = i;
-    }
-    return preds;
   };
   const parseAnd = (): Pred => {
     let left = atom();
@@ -274,28 +276,8 @@ function parsePath(expr: string): XStep[] {
     if (!m) break;
     const name = m[0];
     i += m[0].length;
-    const preds: Pred[] = [];
-    while (i < expr.length && expr[i] === "[") {
-      const start = i + 1;
-      let depth = 1;
-      let quote: string | null = null;
-      let j = start;
-      while (j < expr.length && depth) {
-        const c = expr[j];
-        if (quote !== null) {
-          if (c === quote) quote = null;
-        } else if (c === "'" || c === '"') {
-          quote = c;
-        } else if (c === "[") {
-          depth++;
-        } else if (c === "]") {
-          depth--;
-        }
-        j++;
-      }
-      preds.push(parsePredExpr(expr.slice(start, j - 1)));
-      i = j;
-    }
+    const { preds, next } = parsePredicateBlocks(expr, i);
+    i = next;
     steps.push({ axis, name, preds });
   }
   return steps;
@@ -407,19 +389,6 @@ export function extractResults(
     results.push(result);
   }
   return results;
-}
-
-const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15",
-];
-
-function randomUserAgent(): string {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
 function googleUserAgent(): string {
@@ -843,11 +812,12 @@ export async function autoTextSearch(
     const engine = engines[i++];
     if (seenProviders.has(engine.provider)) continue;
     pending.push(run(engine));
-    if (pending.length >= maxWorkers || i >= maxWorkers) {
+    if (pending.length >= maxWorkers) {
       await Promise.allSettled(pending);
       pending = [];
     }
   }
+  await Promise.allSettled(pending);
   const results = rankResults(aggregator.extractDicts(), query);
   if (results.length) return results.slice(0, maxResults);
   if (timedOut) throw new SearchTimeoutError();

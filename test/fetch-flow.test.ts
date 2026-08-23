@@ -419,6 +419,23 @@ describe("non-followed redirect statuses", () => {
   });
 });
 
+describe("malformed redirect locations", () => {
+  it("returns a clean error instead of throwing", async () => {
+    const result = await fetchUrlRaw("https://example.com/start", {
+      seams: {
+        resolve: async () => ({ ok: true, reason: "", ip: "203.0.113.7", family: 4 }),
+        request: async () => ({
+          status: 302,
+          headers: { location: "http://[::1" },
+          body: Buffer.alloc(0),
+        }),
+      },
+    });
+    expect(result.error).toBe("Failed to fetch URL: the redirect has an invalid Location.");
+    expect(result.body).toBe("");
+  });
+});
+
 describe("request headers", () => {
   it("requests identity content-encoding", async () => {
     let seen: Record<string, string> = {};

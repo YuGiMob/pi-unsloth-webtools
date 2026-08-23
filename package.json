@@ -30,6 +30,7 @@
     "engines.ts",
     "entities.ts",
     "pdf.ts",
+    "user-agents.ts",
     "README.md",
     "LICENSE"
   ],

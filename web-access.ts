@@ -368,6 +368,8 @@ export function isPublicIp(ip: string): boolean {
   if (lower.startsWith("2001:db8")) return false;
   if (lower.startsWith("64:ff9b:")) return false;
   if (lower.startsWith("2001:10:")) return false;
+  if (lower.startsWith("2002:")) return false;
+  if (lower.startsWith("2001:0:") || lower.startsWith("2001::")) return false;
   const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
   if (mapped) return isPublicIp(mapped[1]);
   if (lower.startsWith("::ffff:")) return false;

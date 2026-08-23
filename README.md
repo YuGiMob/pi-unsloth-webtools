@@ -45,7 +45,7 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   validation and fetch.
 - GitHub repo root pages are rewritten to the unauthenticated README API
   (`Accept: application/vnd.github.raw+json`), falling back to the HTML page on failure.
-- Up to 5 redirect hops, each re-validated and re-resolved against the same rules.
+- Up to 4 redirect hops, each re-validated and re-resolved against the same rules.
 - 512 KiB download cap (10 MiB for PDFs), overall deadline + per-hop socket timeouts, abort-aware
   (`signal` cancels mid-flight).
 - PDF text extraction via the official MuPDF.js engine (the same C library pymupdf wraps):

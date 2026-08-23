@@ -110,6 +110,13 @@ describe("isPublicIp", () => {
     expect(isPublicIp("::ffff:192.168.1.1")).toBe(false);
   });
 
+  it("blocks ipv4-embedding tunnel prefixes", () => {
+    expect(isPublicIp("2002:7f00:1::1")).toBe(false);
+    expect(isPublicIp("2002:808:808::")).toBe(false);
+    expect(isPublicIp("2001:0:4136:e378:8000:63bf:3fff:fdd2")).toBe(false);
+    expect(isPublicIp("2001::1")).toBe(false);
+  });
+
   it("accepts public addresses", () => {
     expect(isPublicIp("8.8.8.8")).toBe(true);
     expect(isPublicIp("1.1.1.1")).toBe(true);
