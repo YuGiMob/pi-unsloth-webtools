@@ -407,6 +407,18 @@ describe("fetch deadlines and cancellation", () => {
   });
 });
 
+describe("non-followed redirect statuses", () => {
+  it("reports the status with its standard reason", async () => {
+    const result = await fetchUrlRaw("https://example.com/", {
+      seams: {
+        resolve: async () => ({ ok: true, reason: "", ip: "203.0.113.7", family: 4 }),
+        request: async () => ({ status: 300, headers: {}, body: Buffer.alloc(0) }),
+      },
+    });
+    expect(result.error).toBe("Failed to fetch URL: HTTP 300 Multiple Choices");
+  });
+});
+
 function seamSearch(body: Buffer, contentType: string | null) {
   return seamWithResponseBody(body, contentType);
 }

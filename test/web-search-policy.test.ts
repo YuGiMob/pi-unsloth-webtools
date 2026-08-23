@@ -153,6 +153,16 @@ describe("web_search policy behavior", () => {
     expect(result).toBe("Search cancelled.");
   });
 
+  it("reports cancellation when the signal aborts mid-search", async () => {
+    const controller = new AbortController();
+    const client = fakeClient(() => {
+      controller.abort();
+      throw new EmptySweepError();
+    });
+    const result = await webSearch("q", { signal: controller.signal, client });
+    expect(result).toBe("Search cancelled.");
+  });
+
   it("returns a placeholder when neither query nor url is provided", async () => {
     expect(await webSearch("", {})).toBe("No query provided.");
     expect(await webSearch("   ", {})).toBe("No query provided.");

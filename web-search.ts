@@ -64,23 +64,17 @@ export async function webSearch(
     const results = await client(effectiveQuery, wanted, signal);
     if (signal?.aborted) return "Search cancelled.";
     if (!results.length) return EMPTY_SEARCH_RESULTS[0];
-    const parts: string[] = [];
+    const allowed: SearchResult[] = [];
     for (const result of results) {
-      if (parts.length >= maxResults) break;
+      if (allowed.length >= maxResults) break;
       const href = String(result.href ?? "").trim();
       if (href && !checkUrlAccess(href, policy)[0]) continue;
-      const title = String(result.title ?? "").replace(/\s+/g, " ");
-      const snippet = String(result.body ?? "").replace(/\s+/g, " ");
-      parts.push(`Title: ${title}\nURL: ${href}\nSnippet: ${snippet}`);
+      allowed.push(result);
     }
-    if (!parts.length) return EMPTY_SEARCH_RESULTS[1];
-    const text = parts.join("\n\n---\n\n");
-    return (
-      text +
-      "\n\n---\n\nIMPORTANT: These are only short snippets. " +
-      'To get the full page content, call web_search with the url parameter (e.g. {"url": "<URL>"}).'
-    );
+    if (!allowed.length) return EMPTY_SEARCH_RESULTS[1];
+    return formatSearchResults(allowed);
   } catch (err) {
+    if (signal?.aborted) return "Search cancelled.";
     return searchFailureMessage(err, timeoutMs);
   }
 }
@@ -98,9 +92,9 @@ export function searchFailureMessage(exc: unknown, timeoutMs = SEARCH_TIMEOUT_MS
 
 export function formatSearchResults(results: SearchResult[]): string {
   const parts = results.map((result) => {
-    const title = result.title.replace(/\s+/g, " ");
-    const href = result.href.trim();
-    const snippet = result.body.replace(/\s+/g, " ");
+    const title = String(result.title ?? "").replace(/\s+/g, " ");
+    const href = String(result.href ?? "").trim();
+    const snippet = String(result.body ?? "").replace(/\s+/g, " ");
     return `Title: ${title}\nURL: ${href}\nSnippet: ${snippet}`;
   });
   const text = parts.join("\n\n---\n\n");

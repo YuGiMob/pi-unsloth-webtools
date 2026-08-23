@@ -386,20 +386,19 @@ function requestHop(opts: HopOptions): Promise<HopResponse> {
       const declaredPdf = String(res.headers["content-type"] ?? "").toLowerCase().includes("pdf");
       let limit = declaredPdf ? opts.maxPdfBytes : opts.maxBytes;
       let extendedForPdf = false;
-      let done = false;
       const finish = (err: string | null, body: Buffer) => {
-        if (done) return;
-        done = true;
-        if (err) reject(new Error(err));
-        else
-          resolve({
-            status: res.statusCode ?? 0,
-            headers: res.headers as Record<string, string | string[] | undefined>,
-            body,
-          });
+        settle(() => {
+          if (err) reject(new Error(err));
+          else
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: res.headers as Record<string, string | string[] | undefined>,
+              body,
+            });
+        });
       };
       res.on("data", (chunk: Buffer) => {
-        if (done) return;
+        if (settled) return;
         if (!declaredPdf && !extendedForPdf && total + chunk.length > opts.maxBytes) {
           if (hasPdfMagic(Buffer.concat(chunks))) {
             limit = opts.maxPdfBytes;
@@ -423,10 +422,17 @@ function requestHop(opts: HopOptions): Promise<HopResponse> {
       res.on("end", () => finish(null, Buffer.concat(chunks)));
       res.on("error", (err) => finish(err.message, Buffer.concat(chunks)));
     });
-    request.on("timeout", () => request.destroy(new Error("timed out")));
-    request.on("error", (err) => reject(err));
     const onAbort = () => request.destroy(new Error("cancelled"));
     opts.signal?.addEventListener("abort", onAbort, { once: true });
+    let settled = false;
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      opts.signal?.removeEventListener("abort", onAbort);
+      action();
+    };
+    request.on("timeout", () => request.destroy(new Error("timed out")));
+    request.on("error", (err) => settle(() => reject(err)));
     request.end();
   });
 }
@@ -497,8 +503,9 @@ export async function fetchUrlRaw(
 
     if (response.status >= 300 && response.status < 400) {
       if (![301, 302, 303, 307, 308].includes(response.status)) {
+        const reason = http.STATUS_CODES[response.status] ?? "";
         return {
-          error: `Failed to fetch URL: HTTP ${response.status} ${statusReason(response.status)}`,
+          error: `Failed to fetch URL: HTTP ${response.status}${reason ? ` ${reason}` : ""}`,
           body: "",
           contentType: "",
         };
@@ -610,13 +617,6 @@ function bomCodecFor(bytes: Buffer): string | null {
   if (bytes.length >= 2 && bytes.subarray(0, 2).equals(UTF16_BE_BOM)) return "utf-16be";
   if (bytes.length >= 3 && bytes.subarray(0, 3).equals(UTF8_BOM)) return "utf-8";
   return null;
-}
-
-function statusReason(status: number): string {
-  const reasons: Record<number, string> = {
-    301: "Moved Permanently", 302: "Found", 303: "See Other", 307: "Temporary Redirect", 308: "Permanent Redirect",
-  };
-  return reasons[status] ?? "";
 }
 
 export function truncatePageText(text: string, maxChars?: number): string {
