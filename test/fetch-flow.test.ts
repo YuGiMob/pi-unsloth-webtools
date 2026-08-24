@@ -1,59 +1,17 @@
 import { describe, expect, it } from "vitest";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   fetchPageText,
   fetchUrlRaw,
   looksLikeHtml,
   looksLikeHtmlDocument,
+  requestHop,
 } from "../web-fetch.ts";
 import { githubRepoReadmeApiUrl } from "../web-access.ts";
+import { seamWithResponse } from "./helpers.ts";
 import type { RawFetchSeam } from "./helpers.ts";
-
-const GITHUB_PAGE = `<!DOCTYPE html>
-<html lang="en">
-<head><title>unslothai/unsloth</title></head>
-<body>
-<a class="px-2 py-4" href="#start-of-content">Skip to content</a>
-<header class="Header-old">
-  <div class="AppHeader-globalBar">
-    <a href="/login">Sign in</a>
-    <a href="/signup">Sign up</a>
-  </div>
-</header>
-<div hidden>
-  You signed in with another tab or window. Reload to refresh your session.
-</div>
-<main id="js-repo-pjax-container">
-  <div hidden>
-    <h3 class="blankslate-heading">Uh oh!</h3>
-    <p>There was an error while loading.
-    <a href="" aria-label="Please reload this page">Please reload this page</a>.</p>
-  </div>
-  <div class="repository-content">
-    <article class="markdown-body entry-content">
-      <h1>Unsloth Studio</h1>
-      <p>Unsloth Studio lets you run and train models locally. Fine-tune and
-      run LLMs on Windows, Linux and macOS with a single install command,
-      then export to GGUF, Ollama, vLLM or Hugging Face when you are done.</p>
-      <h2>Install</h2>
-      <pre>curl -fsSL https://unsloth.ai/install.sh | sh</pre>
-      <p>See the <a href="https://unsloth.ai/docs">documentation</a> for
-      quickstarts, notebooks, and fine-tuning guides.</p>
-    </article>
-  </div>
-  <div class="Layout-sidebar">
-    <h2>Languages</h2>
-    <ul>
-      <li><a href="/search?l=javascript">JavaScript 89.3%</a></li>
-    </ul>
-  </div>
-</main>
-<footer>
-  <a href="https://docs.github.com">Docs</a>
-</footer>
-<div aria-live="polite" aria-hidden="true">You can't perform that action at this time.</div>
-</body>
-</html>
-`;
+import { GITHUB_PAGE } from "./fixtures.ts";
 
 function textFetch(result: { error: string | null; body: string; contentType: string }): RawFetchSeam {
   return async () => result;
@@ -382,6 +340,31 @@ describe("fetch deadlines and cancellation", () => {
     expect(result.body).toBe("");
   });
 
+  it("stops a body that outlives the deadline mid-stream", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("a".repeat(64));
+      const timer = setInterval(() => res.write("b".repeat(64)), 20);
+      res.on("close", () => clearInterval(timer));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const deadline = Date.now() + 300;
+    await expect(
+      requestHop({
+        url: new URL(`http://127.0.0.1:${address.port}/`),
+        pinnedIp: "127.0.0.1",
+        family: 4,
+        headers: {},
+        maxBytes: 1024 * 1024,
+        maxPdfBytes: 10 * 1024 * 1024,
+        inactivityMs: 60_000,
+        deadlineMs: deadline,
+      }),
+    ).rejects.toThrow("timed out");
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }, 5000);
+
   it("rejects embedded credentials before resolution", async () => {
     let resolved = 0;
     const result = await fetchUrlRaw("https://user:secret@example.com:8443/page?q=1", {
@@ -399,7 +382,7 @@ describe("fetch deadlines and cancellation", () => {
 
   it("reports an empty content-type instead of the RFC default", async () => {
     const result = await fetchUrlRaw("https://example.com/", {
-      seams: seamSearch(Buffer.from("<html><body>hello</body></html>"), null),
+      seams: seamWithResponse(Buffer.from("<html><body>hello</body></html>"), null),
     });
     expect(result.error).toBeNull();
     expect(result.body).toContain("hello");
@@ -453,15 +436,3 @@ describe("request headers", () => {
   });
 });
 
-function seamSearch(body: Buffer, contentType: string | null) {
-  return seamWithResponseBody(body, contentType);
-}
-
-function seamWithResponseBody(body: Buffer, contentType: string | null) {
-  const headers: Record<string, string> = {};
-  if (contentType !== null) headers["content-type"] = contentType;
-  return {
-    resolve: async () => ({ ok: true, reason: "", ip: "203.0.113.7", family: 4 }),
-    request: async () => ({ status: 200, headers, body }),
-  };
-}

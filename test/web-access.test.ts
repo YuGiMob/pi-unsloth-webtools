@@ -122,6 +122,12 @@ describe("isPublicIp", () => {
     expect(isPublicIp("1.1.1.1")).toBe(true);
     expect(isPublicIp("2606:4700:4700::1111")).toBe(true);
   });
+
+  it("blocks documentation and TEST-NET ranges", () => {
+    expect(isPublicIp("192.0.2.1")).toBe(false);
+    expect(isPublicIp("198.51.100.7")).toBe(false);
+    expect(isPublicIp("203.0.113.7")).toBe(false);
+  });
 });
 
 describe("websitePolicyPrompt and scopeSearchQuery", () => {

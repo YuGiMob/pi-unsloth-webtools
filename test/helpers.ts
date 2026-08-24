@@ -1,6 +1,5 @@
 import type {
   FetchSeams,
-  HopResponse,
   RawFetchOptions,
   RawFetchResult,
   ResolvedHost,
@@ -107,42 +106,6 @@ export function makePdf(
       `trailer\n<< /Root 1 0 R${encryptRef} >>\n%%EOF\n`,
     "latin1",
   );
-}
-
-export async function rawFetchWith(
-  body: Buffer,
-  contentType: string | null,
-  options: {
-    status?: number;
-    extraHeaders?: Record<string, string>;
-    resolve?: (hostname: string, signal?: AbortSignal) => Promise<ResolvedHost>;
-    request?: (opts: {
-      url: URL;
-      pinnedIp: string;
-      family: number;
-      headers: Record<string, string>;
-      maxBytes: number;
-      maxPdfBytes: number;
-      inactivityMs: number;
-      signal?: AbortSignal;
-    }) => Promise<HopResponse>;
-  } = {},
-) {
-  const seam: FetchSeams = {
-    resolve: options.resolve ?? (async () => fakeResolve()),
-    request: options.request,
-  };
-  if (!options.request) {
-    seam.request = async () => ({
-      status: options.status ?? 200,
-      headers: {
-        ...(options.extraHeaders ?? {}),
-        ...(contentType !== null ? { "content-type": contentType } : {}),
-      },
-      body,
-    });
-  }
-  return fetchWith(body, contentType, { seams: seam, maxBytes: 1_000_000 });
 }
 
 export type RawFetchSeam = (

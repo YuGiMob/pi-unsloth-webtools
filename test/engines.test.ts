@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EmptySweepError,
   ResultsAggregator,
+  SearchCancelled,
   SearchTimeoutError,
   autoTextSearch,
   extractResults,
@@ -232,6 +233,34 @@ describe("wikipedia engine", () => {
       vi.fn(async () => {
         throw new TypeError("fetch failed");
       }),
+    );
+    await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(EmptySweepError);
+  });
+
+  it("propagates cancellation when the signal aborts mid-sweep", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        controller.abort();
+        throw new DOMException("aborted", "AbortError");
+      }),
+    );
+    await expect(autoTextSearch("cat", 5, 10_000, controller.signal)).rejects.toThrow(SearchCancelled);
+  });
+
+  it("ignores oversized engine responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("x".repeat(6 * 1024 * 1024), { status: 200 })),
+    );
+    await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(EmptySweepError);
+  });
+
+  it("accepts a bodyless response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 200 })),
     );
     await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(EmptySweepError);
   });

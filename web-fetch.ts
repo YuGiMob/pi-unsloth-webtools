@@ -10,6 +10,7 @@ import {
   type WebsitePolicy,
 } from "./web-access.ts";
 import { htmlToMarkdown } from "./html-to-md.ts";
+import { INVALID_CHARREFS } from "./entities.ts";
 import { extractPdfText, PdfParseError } from "./pdf.ts";
 import { randomUserAgent } from "./user-agents.ts";
 
@@ -97,14 +98,17 @@ const ASCII_TEXT_BYTES = new Set<number>([
   0x1b,
 ]);
 
-const CP1252_HIGH: Record<number, number> = {
-  0x80: 0x20ac, 0x82: 0x201a, 0x83: 0x0192, 0x84: 0x201e, 0x85: 0x2026,
-  0x86: 0x2020, 0x87: 0x2021, 0x88: 0x02c6, 0x89: 0x2030, 0x8a: 0x0160,
-  0x8b: 0x2039, 0x8c: 0x0152, 0x8e: 0x017d, 0x91: 0x2018, 0x92: 0x2019,
-  0x93: 0x201c, 0x94: 0x201d, 0x95: 0x2022, 0x96: 0x2013, 0x97: 0x2014,
-  0x98: 0x02dc, 0x99: 0x2122, 0x9a: 0x0161, 0x9b: 0x203a, 0x9c: 0x0153,
-  0x9e: 0x017e, 0x9f: 0x0178,
-};
+export class FetchCancelledError extends Error {
+  constructor() {
+    super("cancelled");
+  }
+}
+
+export class FetchTimeoutError extends Error {
+  constructor() {
+    super("timed out");
+  }
+}
 
 export interface FetchPageOptions {
   timeoutMs?: number;
@@ -145,6 +149,8 @@ export interface HopOptions {
   maxBytes: number;
   maxPdfBytes: number;
   inactivityMs: number;
+  deadlineMs?: number;
+  nowMs?: () => number;
   signal?: AbortSignal;
 }
 
@@ -339,8 +345,8 @@ function decodeSingleByte(bytes: Buffer, cp1252: boolean): string {
   for (const byte of bytes) {
     if (byte < 0x80) {
       out += String.fromCharCode(byte);
-    } else if (cp1252 && byte in CP1252_HIGH) {
-      out += String.fromCodePoint(CP1252_HIGH[byte]);
+    } else if (cp1252 && byte in INVALID_CHARREFS) {
+      out += INVALID_CHARREFS[byte];
     } else {
       out += String.fromCharCode(byte);
     }
@@ -431,7 +437,7 @@ function fetchBudgetExceeded(
 }
 
 
-function requestHop(opts: HopOptions): Promise<HopResponse> {
+export function requestHop(opts: HopOptions): Promise<HopResponse> {
   return new Promise((resolve, reject) => {
     const url = opts.url;
     const transport = url.protocol === "https:" ? https : http;
@@ -446,6 +452,13 @@ function requestHop(opts: HopOptions): Promise<HopResponse> {
       lookup: (_host, _opts, callback) =>
         callback(null, [{ address: opts.pinnedIp, family: opts.family }]),
     };
+    let settled = false;
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      opts.signal?.removeEventListener("abort", onAbort);
+      action();
+    };
     const request = transport.request(options, (res: IncomingMessage) => {
       const chunks: Buffer[] = [];
       let total = 0;
@@ -454,17 +467,27 @@ function requestHop(opts: HopOptions): Promise<HopResponse> {
       let extendedForPdf = false;
       const finish = (err: string | null, body: Buffer) => {
         settle(() => {
-          if (err) reject(new Error(err));
-          else
+          if (err) {
+            if (err === "cancelled") reject(new FetchCancelledError());
+            else if (err === "timed out") reject(new FetchTimeoutError());
+            else reject(new Error(err));
+          } else {
             resolve({
               status: res.statusCode ?? 0,
               headers: res.headers as Record<string, string | string[] | undefined>,
               body,
             });
+          }
         });
       };
       res.on("data", (chunk: Buffer) => {
         if (settled) return;
+        const now = opts.nowMs ?? Date.now;
+        if (opts.deadlineMs !== undefined && now() >= opts.deadlineMs) {
+          res.destroy();
+          finish("timed out", Buffer.concat(chunks));
+          return;
+        }
         if (!declaredPdf && !extendedForPdf && total + chunk.length > opts.maxBytes) {
           if (hasPdfMagic(Buffer.concat(chunks))) {
             limit = opts.maxPdfBytes;
@@ -488,16 +511,9 @@ function requestHop(opts: HopOptions): Promise<HopResponse> {
       res.on("end", () => finish(null, Buffer.concat(chunks)));
       res.on("error", (err) => finish(err.message, Buffer.concat(chunks)));
     });
-    const onAbort = () => request.destroy(new Error("cancelled"));
+    const onAbort = () => request.destroy(new FetchCancelledError());
     opts.signal?.addEventListener("abort", onAbort, { once: true });
-    let settled = false;
-    const settle = (action: () => void) => {
-      if (settled) return;
-      settled = true;
-      opts.signal?.removeEventListener("abort", onAbort);
-      action();
-    };
-    request.on("timeout", () => request.destroy(new Error("timed out")));
+    request.on("timeout", () => request.destroy(new FetchTimeoutError()));
     request.on("error", (err) => settle(() => reject(err)));
     request.end();
   });
@@ -557,9 +573,15 @@ export async function fetchUrlRaw(
         maxBytes,
         maxPdfBytes,
         inactivityMs: inactivity,
+        deadlineMs: deadline,
+        nowMs: now,
         signal,
       });
     } catch (err) {
+      if (err instanceof FetchCancelledError)
+        return { error: "Failed to fetch URL: cancelled.", body: "", contentType: "" };
+      if (err instanceof FetchTimeoutError)
+        return { error: "Failed to fetch URL: timed out.", body: "", contentType: "" };
       const message = err instanceof Error ? err.message : String(err);
       if (message === "cancelled")
         return { error: "Failed to fetch URL: cancelled.", body: "", contentType: "" };

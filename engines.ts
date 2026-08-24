@@ -472,6 +472,28 @@ async function httpPost(
   return httpFetch(url, { ...options, method: "POST", body: new URLSearchParams(data).toString() });
 }
 
+const MAX_ENGINE_RESPONSE_BYTES = 5 * 1024 * 1024;
+
+async function readBodyCapped(response: Response): Promise<string | null> {
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (declared > MAX_ENGINE_RESPONSE_BYTES) return null;
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > MAX_ENGINE_RESPONSE_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder("utf-8").decode(Buffer.concat(chunks));
+}
+
 async function httpFetch(
   url: string,
   options: {
@@ -505,13 +527,18 @@ async function httpFetch(
       signal: AbortSignal.any(signals),
     });
   } catch (err) {
-    if (err instanceof DOMException && err.name === "TimeoutError") {
-      throw new Error("timed out");
-    }
+    if (err instanceof DOMException && err.name === "TimeoutError") throw new SearchTimeoutError();
+    if (err instanceof DOMException && err.name === "AbortError") throw new SearchCancelled();
     throw err;
   }
   if (response.status !== 200) return null;
-  return response.text();
+  try {
+    return await readBodyCapped(response);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") throw new SearchTimeoutError();
+    if (err instanceof DOMException && err.name === "AbortError") throw new SearchCancelled();
+    throw err;
+  }
 }
 
 const DUCKDUCKGO: Engine = {
@@ -792,6 +819,7 @@ export async function autoTextSearch(
   const aggregator = new ResultsAggregator();
   const ctx: EngineContext = { region: "us-en", safesearch: "moderate" };
   let timedOut = false;
+  let cancelled = false;
   const uniqueProviders = new Set(engines.map((e) => e.provider)).size;
   const maxWorkers = Math.min(uniqueProviders, Math.ceil(maxResults / 10) + 1);
   let i = 0;
@@ -804,7 +832,8 @@ export async function autoTextSearch(
         seenProviders.add(engine.provider);
       }
     } catch (e) {
-      if (e instanceof Error && e.message.includes("timed out")) timedOut = true;
+      if (e instanceof SearchCancelled) cancelled = true;
+      if (e instanceof SearchTimeoutError) timedOut = true;
     }
   };
   while (i < engines.length) {
@@ -818,6 +847,7 @@ export async function autoTextSearch(
     }
   }
   await Promise.allSettled(pending);
+  if (cancelled) throw new SearchCancelled();
   const results = rankResults(aggregator.extractDicts(), query);
   if (results.length) return results.slice(0, maxResults);
   if (timedOut) throw new SearchTimeoutError();
