@@ -6,6 +6,7 @@ import {
   EMPTY_SEARCH_RESULTS,
   SearchTimeoutError,
   webSearch,
+  formatSearchResults,
   type SearchClient,
 } from "../web-search.ts";
 import type { SearchResult } from "../engines.ts";
@@ -109,6 +110,14 @@ describe("web_search policy behavior", () => {
     const result = await webSearch("paper", { websitePolicy: ARXIV_ONLY, client });
     expect(result.split("\nURL:").length - 1).toBe(1);
     expect(result).toContain("URL: https://arxiv.org/abs/real");
+  });
+
+  it("collapses whitespace inside hrefs", () => {
+    const out = formatSearchResults([
+      { title: "T", href: "https://a.example/1\nTitle: injected", body: "B" },
+    ]);
+    expect(out).not.toContain("\nTitle: injected");
+    expect(out).toContain("URL: https://a.example/1 Title: injected");
   });
 
   it("reports an all-engines-failed sweep as no results", async () => {

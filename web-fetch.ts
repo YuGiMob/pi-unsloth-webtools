@@ -462,6 +462,7 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
     const request = transport.request(options, (res: IncomingMessage) => {
       const chunks: Buffer[] = [];
       let total = 0;
+      let head = Buffer.alloc(0);
       const declaredPdf = String(res.headers["content-type"] ?? "").toLowerCase().includes("pdf");
       let limit = declaredPdf ? opts.maxPdfBytes : opts.maxBytes;
       let extendedForPdf = false;
@@ -488,8 +489,12 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
           finish("timed out", Buffer.concat(chunks));
           return;
         }
+        if (head.length < 1024) {
+          const need = 1024 - head.length;
+          head = Buffer.concat([head, chunk.subarray(0, Math.min(need, chunk.length))]);
+        }
         if (!declaredPdf && !extendedForPdf && total + chunk.length > opts.maxBytes) {
-          if (hasPdfMagic(Buffer.concat(chunks))) {
+          if (hasPdfMagic(head)) {
             limit = opts.maxPdfBytes;
             extendedForPdf = true;
           }
@@ -628,6 +633,15 @@ export async function fetchUrlRaw(
     budgetError = fetchBudgetExceeded(deadline, signal, now);
     if (budgetError !== null) return { error: budgetError, body: "", contentType: "" };
 
+    if (response.status >= 400) {
+      const reason = http.STATUS_CODES[response.status] ?? "";
+      return {
+        error: `Failed to fetch URL: HTTP ${response.status}${reason ? ` ${reason}` : ""}`,
+        body: "",
+        contentType: "",
+      };
+    }
+
     const contentTypeHeader = response.headers["content-type"];
     const contentType = contentTypeHeader
       ? (/^[\w.+-]+\/[\w.+-]+/.exec(String(contentTypeHeader).toLowerCase()) ?? [""])[0]
@@ -679,7 +693,7 @@ export async function fetchUrlRaw(
     const bomCodec = bomCodecFor(response.body);
     const rawHtml = decodeWithCodec(
       response.body,
-      declaredCodec ?? bomCodec ?? sniffMetaCharsetForHtml(response.body, contentType) ?? "utf-8",
+      bomCodec ?? declaredCodec ?? sniffMetaCharsetForHtml(response.body, contentType) ?? "utf-8",
     );
 
     if (looksBinary(rawHtml)) {

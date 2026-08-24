@@ -180,6 +180,14 @@ describe("binary sniffing", () => {
     }
   });
 
+  it("prefers the BOM over a conflicting declared charset", async () => {
+    const text = "name,value\nreadable,42\n".repeat(100);
+    const body = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+    const out = await fetchWith(body, "text/plain; charset=utf-8");
+    expect(out).toContain("readable");
+    expect(out).not.toContain("binary content");
+  });
+
   it("catches valid utf-8 binary via control chars", async () => {
     const body = repeatBuffer(Buffer.from([0, 1, 2, 3, 4, 5, 6, 7]), 400);
     const out = await fetchWith(body, "text/plain");

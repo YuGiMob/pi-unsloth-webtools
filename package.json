@@ -51,7 +51,8 @@
     "test:unit": "vitest run --exclude **/smoke.test.ts",
     "test:smoke": "vitest run test/smoke.test.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm run test:unit"
+    "check:package": "node -e \"const fs=require('fs');const pkg=require('./package.json');const listed=new Set(pkg.files);const bad=[];for(const f of pkg.files){if(!fs.existsSync(f))bad.push('missing file: '+f)}for(const f of fs.readdirSync('.').filter(f=>f.endsWith('.ts'))){if(!listed.has(f))bad.push('unlisted source: '+f)}if(bad.length){console.error(bad.join('\\n'));process.exit(1)}\"",
+    "prepublishOnly": "npm run typecheck && npm run test:unit && npm run check:package"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.0",

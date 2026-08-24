@@ -20,6 +20,10 @@
     "web-fetch.ts",
     "web-access.ts",
     "html-to-md.ts",
+    "engines.ts",
+    "entities.ts",
+    "pdf.ts",
+    "user-agents.ts",
     "test/**/*.ts"
   ]
 }

@@ -45,6 +45,8 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   validation and fetch.
 - GitHub repo root pages are rewritten to the unauthenticated README API
   (`Accept: application/vnd.github.raw+json`), falling back to the HTML page on failure.
+- HTTP 4xx/5xx responses are reported as errors with the status reason instead of
+  returning error-page content.
 - Up to 4 redirect hops, each re-validated and re-resolved against the same rules.
 - 512 KiB download cap (10 MiB for PDFs), overall deadline + per-hop socket timeouts, abort-aware
   (`signal` cancels mid-flight).
@@ -53,7 +55,7 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   pymupdf4llm-style markdown layer (headings, bold/italic, code fences, links, tables)
   with Studio's corrupted/incomplete fallback to plain text.
 - Content sniffing: MIME allow/deny, binary magic signatures, PDF magic detection, and charset
-  decoding (declared charset, BOM sniffing for UTF-8/16/32, `<meta charset>` sniffing for
+  decoding (BOM sniffing for UTF-8/16/32 first, then the declared charset, `<meta charset>` sniffing for
   CJK and Windows/ISO encodings, cp1252 rescue for mislabeled single-byte pages).
 - HTML → Markdown conversion ported from Studio's dependency-free `_html_to_md.py`: headings,
   links, emphasis, lists, tables, blockquotes, code fences, entity decoding; hidden-element
@@ -78,7 +80,9 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   database.
 - Empty sweeps: ddgs 9.14.4 raises the last engine exception; this port reports a
   timeout whenever any engine timed out, so the timeout message is not masked by later
-  generic engine failures.
+  generic engine failures. The timeout budget bounds the entire sweep: per-engine
+  timeouts shrink as the budget is consumed, so the reported timeout matches the
+  worst-case wall time.
 - Proxies: Studio routes through environment proxies; this port always connects
   directly with DNS pinning (deliberately out of scope).
 

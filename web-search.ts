@@ -93,7 +93,7 @@ export function searchFailureMessage(exc: unknown, timeoutMs = SEARCH_TIMEOUT_MS
 export function formatSearchResults(results: SearchResult[]): string {
   const parts = results.map((result) => {
     const title = String(result.title ?? "").replace(/\s+/g, " ");
-    const href = String(result.href ?? "").trim();
+    const href = String(result.href ?? "").replace(/\s+/g, " ").trim();
     const snippet = String(result.body ?? "").replace(/\s+/g, " ");
     return `Title: ${title}\nURL: ${href}\nSnippet: ${snippet}`;
   });

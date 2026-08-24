@@ -9,7 +9,7 @@ import {
   requestHop,
 } from "../web-fetch.ts";
 import { githubRepoReadmeApiUrl } from "../web-access.ts";
-import { seamWithResponse } from "./helpers.ts";
+import { fakeResolve, seamWithResponse } from "./helpers.ts";
 import type { RawFetchSeam } from "./helpers.ts";
 import { GITHUB_PAGE } from "./fixtures.ts";
 
@@ -88,6 +88,32 @@ describe("github readme rewrite", () => {
     expect(out).toContain("Unsloth Studio");
     expect(out).not.toContain("Uh oh!");
     expect(out).not.toContain("There was an error while loading");
+  });
+
+  it("falls back when the readme api returns an error status", async () => {
+    const out = await fetchPageText("https://github.com/unslothai/unsloth", {
+      seams: {
+        resolve: async () => fakeResolve(),
+        request: async (opts) => {
+          if (opts.url.hostname === "api.github.com") {
+            return {
+              status: 403,
+              headers: { "content-type": "application/json" },
+              body: Buffer.from(
+                '{"message":"API rate limit exceeded","documentation_url":"https://docs.github.com/rest"}',
+              ),
+            };
+          }
+          return {
+            status: 200,
+            headers: { "content-type": "text/html" },
+            body: Buffer.from(GITHUB_PAGE),
+          };
+        },
+      },
+    });
+    expect(out).toContain("Unsloth Studio");
+    expect(out).not.toContain("rate limit");
   });
 
   it("keeps markdown readmes with fenced html examples verbatim", async () => {
@@ -399,6 +425,33 @@ describe("non-followed redirect statuses", () => {
       },
     });
     expect(result.error).toBe("Failed to fetch URL: HTTP 300 Multiple Choices");
+  });
+});
+
+describe("error statuses", () => {
+  it("reports 4xx and 5xx responses as errors", async () => {
+    for (const [status, expected] of [
+      [400, "HTTP 400 Bad Request"],
+      [403, "HTTP 403 Forbidden"],
+      [404, "HTTP 404 Not Found"],
+      [429, "HTTP 429 Too Many Requests"],
+      [500, "HTTP 500 Internal Server Error"],
+      [503, "HTTP 503 Service Unavailable"],
+    ] as const) {
+      const result = await fetchUrlRaw("https://example.com/", {
+        seams: {
+          resolve: async () => fakeResolve(),
+          request: async () => ({
+            status,
+            headers: { "content-type": "text/html" },
+            body: Buffer.from("<html><body>error page</body></html>"),
+          }),
+        },
+      });
+      expect(result.error).toBe(`Failed to fetch URL: ${expected}`);
+      expect(result.body).toBe("");
+      expect(result.contentType).toBe("");
+    }
   });
 });
 

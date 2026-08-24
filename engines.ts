@@ -510,6 +510,7 @@ async function httpFetch(
     Accept: "*/*",
     ...options.headers,
   };
+  if (options.method === "POST") headers["Content-Type"] = "application/x-www-form-urlencoded";
   const cookie = options.cookies
     ? Object.entries(options.cookies)
         .map(([key, value]) => `${key}=${value}`)
@@ -695,6 +696,7 @@ const WIKIPEDIA: Engine = {
   provider: "wikipedia",
   priority: 2,
   async search(query, ctx, timeoutMs, signal) {
+    const started = Date.now();
     const lang = ctx.region.toLowerCase().split("-")[1] ?? "en";
     const encoded = encodeURIComponent(query);
     const opensearchUrl =
@@ -715,7 +717,7 @@ const WIKIPEDIA: Engine = {
     const extractUrl =
       `https://${lang}.wikipedia.org/w/api.php?action=query&format=json&prop=extracts` +
       `&titles=${encodeURIComponent(title)}&explaintext=0&exintro=0&redirects=1`;
-    const extract = await httpGet(extractUrl, {}, { timeoutMs, signal });
+    const extract = await httpGet(extractUrl, {}, { timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), signal });
     if (extract) {
       try {
         const pageData = JSON.parse(extract) as {
@@ -815,6 +817,7 @@ export async function autoTextSearch(
   signal?: AbortSignal,
 ): Promise<SearchResult[]> {
   const engines = shuffledEngines();
+  const deadline = Date.now() + timeoutMs;
   const seenProviders = new Set<string>();
   const aggregator = new ResultsAggregator();
   const ctx: EngineContext = { region: "us-en", safesearch: "moderate" };
@@ -825,8 +828,9 @@ export async function autoTextSearch(
   let i = 0;
   let pending: Promise<void>[] = [];
   const run = async (engine: Engine) => {
+    const remaining = Math.max(1, deadline - Date.now());
     try {
-      const results = await engine.search(query, ctx, timeoutMs, signal);
+      const results = await engine.search(query, ctx, remaining, signal);
       if (results && results.length) {
         aggregator.extend(results);
         seenProviders.add(engine.provider);

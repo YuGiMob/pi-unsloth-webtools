@@ -265,3 +265,52 @@ describe("wikipedia engine", () => {
     await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(EmptySweepError);
   });
 });
+
+describe("sweep deadline", () => {
+  it("bounds the whole sweep by the timeout budget", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, opts?: RequestInit) => {
+        calls++;
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation timed out.", "TimeoutError"));
+          });
+        });
+      }),
+    );
+    const start = performance.now();
+    await expect(autoTextSearch("cat", 5, 250)).rejects.toThrow(SearchTimeoutError);
+    expect(performance.now() - start).toBeLessThan(1_000);
+    expect(calls).toBe(7);
+  }, 10_000);
+});
+
+describe("engine request headers", () => {
+  it("sends a form content-type on the duckduckgo post", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        if (String(url).includes("html.duckduckgo.com")) {
+          const items = Array.from(
+            { length: 5 },
+            (_, i) =>
+              `<div class="result"><div class="body"><h2><a href="https://example.com/${i}">Result ${i}</a></h2><a href="https://example.com/${i}">Snippet ${i}.</a></div></div>`
+          ).join("");
+          return Promise.resolve(new Response(items, { status: 200 }));
+        }
+        return Promise.resolve(new Response(null, { status: 200 }));
+      }),
+    );
+    const results = await autoTextSearch("cat", 5, 10_000);
+    const post = calls.find((call) => call.init?.method === "POST");
+    expect(post).toBeDefined();
+    expect(post?.init?.headers).toMatchObject({
+      "Content-Type": "application/x-www-form-urlencoded",
+    });
+    expect(results.length).toBe(5);
+  });
+});
