@@ -247,6 +247,12 @@ describe("html_to_markdown formatting", () => {
     expect(out).toContain("5 < 6");
     expect(out).toContain("€");
   });
+
+  it("decodes semicolonless numeric references", () => {
+    const out = htmlToMarkdown("<p>&#128; &#128 &#x80 &#x41; &#x41</p>");
+    expect(out.split("€").length - 1).toBe(3);
+    expect(out.split("A").length - 1).toBe(2);
+  });
 });
 
 describe("self-closing tags", () => {

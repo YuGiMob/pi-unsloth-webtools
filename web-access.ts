@@ -151,19 +151,10 @@ function normalizeDomainList(domains: unknown[], listName: string): string[] {
   return out;
 }
 
-function normalizePolicy(policy: WebsitePolicy | null | undefined): WebsitePolicy {
-  if (!policy) return { allowedDomains: [], blockedDomains: [] };
-  const normalized: WebsitePolicy = { allowedDomains: [], blockedDomains: [] };
-  for (const key of ["allowedDomains", "blockedDomains"] as const) {
-    normalized[key] = normalizeDomainList(policy[key], key);
-  }
-  return normalized;
-}
-
 function policyAllows(host: string, policy: WebsitePolicy | null): boolean {
   let normalized: WebsitePolicy;
   try {
-    normalized = normalizePolicy(policy);
+    normalized = normalizeWebsitePolicy(policy);
   } catch {
     return false;
   }

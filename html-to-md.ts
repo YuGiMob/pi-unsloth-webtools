@@ -335,9 +335,9 @@ export function feedHtml(input: string, handlers: HtmlHandlers): void {
         pos = amp + named[0].length;
         continue;
       }
-      const numeric = /^&#(?:[xX]([0-9a-fA-F]+)|([0-9]+));/.exec(text.slice(amp));
+      const numeric = /^&#([xX][0-9a-fA-F]+|[0-9]+);?/.exec(text.slice(amp));
       if (numeric) {
-        handlers.handleCharRef(numeric[1] ?? numeric[2]);
+        handlers.handleCharRef(numeric[1]);
         pos = amp + numeric[0].length;
         continue;
       }

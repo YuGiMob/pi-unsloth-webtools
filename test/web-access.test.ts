@@ -3,6 +3,7 @@ import {
   checkUrlAccess,
   githubRepoRawReadmeUrl,
   githubRepoReadmeApiUrl,
+  hostnameAllowed,
   isPublicIp,
   normalizeDomain,
   normalizeUrlScheme,
@@ -75,6 +76,15 @@ describe("checkUrlAccess", () => {
     expect(checkUrlAccess("https://sub.docs.example.com/x", policy)[0]).toBe(true);
     expect(checkUrlAccess("https://other.com/x", policy)[0]).toBe(false);
     expect(checkUrlAccess("https://bad.example.com/x", policy)[0]).toBe(false);
+  });
+
+  it("fails closed when a policy exceeds the domain cap", () => {
+    const overLimit = {
+      allowedDomains: Array.from({ length: 101 }, (_, i) => `d${i}.example`),
+      blockedDomains: [],
+    };
+    expect(checkUrlAccess("https://d0.example/x", overLimit)[0]).toBe(false);
+    expect(hostnameAllowed("d0.example", overLimit)).toBe(false);
   });
 });
 

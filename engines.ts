@@ -479,15 +479,22 @@ export interface Engine {
   ): Promise<SearchResult[] | null>;
 }
 
+interface HttpRequestOptions {
+  headers?: Record<string, string>;
+  cookies?: Record<string, string>;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}
+
+interface HttpOptions extends HttpRequestOptions {
+  method?: string;
+  body?: string;
+}
+
 async function httpGet(
   url: string,
   params: Record<string, string>,
-  options: {
-    headers?: Record<string, string>;
-    cookies?: Record<string, string>;
-    timeoutMs: number;
-    signal?: AbortSignal;
-  },
+  options: HttpRequestOptions,
 ): Promise<string | null> {
   const target = new URL(url);
   for (const [key, value] of Object.entries(params)) target.searchParams.set(key, value);
@@ -497,12 +504,7 @@ async function httpGet(
 async function httpPost(
   url: string,
   data: Record<string, string>,
-  options: {
-    headers?: Record<string, string>;
-    cookies?: Record<string, string>;
-    timeoutMs: number;
-    signal?: AbortSignal;
-  },
+  options: HttpRequestOptions,
 ): Promise<string | null> {
   return httpFetch(url, { ...options, method: "POST", body: new URLSearchParams(data).toString() });
 }
@@ -537,14 +539,7 @@ function mapFetchError(err: unknown): never {
 
 async function httpFetch(
   url: string,
-  options: {
-    method?: string;
-    body?: string;
-    headers?: Record<string, string>;
-    cookies?: Record<string, string>;
-    timeoutMs: number;
-    signal?: AbortSignal;
-  },
+  options: HttpOptions,
 ): Promise<string | null> {
   const headers: Record<string, string> = {
     "User-Agent": options.headers?.["User-Agent"] ?? randomUserAgent(),
@@ -885,7 +880,7 @@ export async function autoTextSearch(
     }
   };
   while (i < engines.length) {
-    if (aggregator.size >= maxResults) break;
+    if (aggregator.size >= maxResults || cancelled) break;
     const engine = engines[i++];
     if (seenProviders.has(engine.provider)) continue;
     pending.push(run(engine));
