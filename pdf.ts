@@ -26,6 +26,7 @@ interface MupdfDocument {
 
 interface MupdfPage {
   toStructuredText(options?: string): MupdfStructuredText;
+  getBounds(): [number, number, number, number];
   getLinks(): { getBounds(): [number, number, number, number]; getURI(): string }[];
   destroy(): void;
 }
@@ -136,10 +137,13 @@ function markdownCorrupted(text: string): boolean {
   return shaped > threshold || (text.match(/\ufffd/g) ?? []).length > threshold;
 }
 
-function markdownIncomplete(markdown: string, plain: string): boolean {
-  const plainLetters = [...plain].filter((c) => /[\p{L}\p{N}]/u.test(c)).length;
+function countLetters(text: string): number {
+  return [...text].filter((c) => /[\p{L}\p{N}]/u.test(c)).length;
+}
+
+function markdownIncomplete(markdown: string, plainLetters: number): boolean {
   if (plainLetters < PDF_INCOMPLETE_MIN_LETTERS) return false;
-  const markdownLetters = [...markdown].filter((c) => /[\p{L}\p{N}]/u.test(c)).length;
+  const markdownLetters = countLetters(markdown);
   return markdownLetters < PDF_INCOMPLETE_RATIO * plainLetters;
 }
 
@@ -253,6 +257,84 @@ function getRawLines(json: JsonBlock[]): MergedLine[] {
   }
   nlines.push({ lrect, spans: sanitizeLine(line) });
   return nlines;
+}
+
+const RUNNING_EDGE_FRACTION = 0.12;
+const RUNNING_MIN_PAGES = 2;
+const RUNNING_MIN_FRACTION = 0.5;
+const RUNNING_POSITION_TOLERANCE = 5;
+const PAGE_NUMBER_RE = /^\d{1,4}$/;
+
+function lineText(line: MergedLine): string {
+  return line.spans.map((s) => s.text).join(" ").trim();
+}
+
+function lineAtEdge(line: MergedLine, pageHeight: number): boolean {
+  return (
+    line.lrect.y0 < pageHeight * RUNNING_EDGE_FRACTION ||
+    line.lrect.y1 > pageHeight * (1 - RUNNING_EDGE_FRACTION)
+  );
+}
+
+function linePositionKey(y0: number): number {
+  return Math.round(y0 / RUNNING_POSITION_TOLERANCE);
+}
+
+function countRunningLines(
+  pages: PageData[],
+  heights: number[],
+): { textCounts: Map<string, number>; numericPositionCounts: Map<number, number> } {
+  const textCounts = new Map<string, number>();
+  const numericPositionCounts = new Map<number, number>();
+  for (let i = 0; i < pages.length; i++) {
+    const height = heights[i];
+    const seenTexts = new Set<string>();
+    const seenPositions = new Set<number>();
+    for (const line of pages[i].lines) {
+      if (!lineAtEdge(line, height)) continue;
+      const text = lineText(line);
+      if (!text) continue;
+      const position = linePositionKey(line.lrect.y0);
+      const key = `${text}@${position}`;
+      if (!seenTexts.has(key)) {
+        seenTexts.add(key);
+        textCounts.set(key, (textCounts.get(key) ?? 0) + 1);
+      }
+      if (!seenPositions.has(position)) {
+        seenPositions.add(position);
+        if (PAGE_NUMBER_RE.test(text)) {
+          numericPositionCounts.set(position, (numericPositionCounts.get(position) ?? 0) + 1);
+        }
+      }
+    }
+  }
+  return { textCounts, numericPositionCounts };
+}
+
+function stripRunningLines(pages: PageData[], heights: number[]): number[] {
+  const { textCounts, numericPositionCounts } = countRunningLines(pages, heights);
+  const threshold = Math.max(RUNNING_MIN_PAGES, Math.ceil(pages.length * RUNNING_MIN_FRACTION));
+  const removedLetters: number[] = [];
+  for (let i = 0; i < pages.length; i++) {
+    const height = heights[i];
+    let removed = 0;
+    pages[i].lines = pages[i].lines.filter((line) => {
+      if (!lineAtEdge(line, height)) return true;
+      const text = lineText(line);
+      if (!text) return true;
+      const position = linePositionKey(line.lrect.y0);
+      const repeated = (textCounts.get(`${text}@${position}`) ?? 0) >= threshold;
+      const pageNumber =
+        PAGE_NUMBER_RE.test(text) && (numericPositionCounts.get(position) ?? 0) >= threshold;
+      if (repeated || pageNumber) {
+        removed += countLetters(text);
+        return false;
+      }
+      return true;
+    });
+    removedLetters.push(removed);
+  }
+  return removedLetters;
 }
 
 function findLink(links: LinkInfo[], span: SpanData): string | null {
@@ -467,8 +549,11 @@ export async function extractPdfPages(
     const total = doc.countPages();
     const count = Math.min(total, MAX_WEB_PDF_PAGES);
     const pages: PageData[] = [];
+    const heights: number[] = [];
     for (let i = 0; i < count; i++) {
       const page = doc.loadPage(i);
+      const bounds = page.getBounds();
+      heights.push(bounds[3] - bounds[1]);
       let st: MupdfStructuredText | null = null;
       try {
         st = page.toStructuredText("");
@@ -490,10 +575,12 @@ export async function extractPdfPages(
         page.destroy();
       }
     }
+    const removedLetters = stripRunningLines(pages, heights);
     const info = identifyHeaders(pages.map((p) => p.lines));
     const extracted = pages.map((p, i) => {
       const markdown = renderPageMarkdown(p.lines, info, p.links);
-      const text = markdownCorrupted(markdown) || markdownIncomplete(markdown, p.plain) ? p.plain : markdown;
+      const plainLetters = Math.max(0, countLetters(p.plain) - removedLetters[i]);
+      const text = markdownCorrupted(markdown) || markdownIncomplete(markdown, plainLetters) ? p.plain : markdown;
       return { text, pageNumber: i + 1 };
     });
     return { pages: extracted, totalPages: total };

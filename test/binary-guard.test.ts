@@ -110,7 +110,7 @@ describe("pdf handling", () => {
   });
 
   it("does not mark a pdf at exactly the page cap", async () => {
-    const pages = Array.from({ length: 50 }, () => "short");
+    const pages = Array.from({ length: 50 }, () => [{ text: "short", y: 400 }]);
     const out = await fetchWith(makePdf(pages), "application/pdf");
     expect(out).not.toContain("extraction is capped");
     expect(out).toContain("## Page 50\n\nshort");

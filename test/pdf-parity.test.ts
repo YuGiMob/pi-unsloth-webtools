@@ -181,3 +181,108 @@ describe("mupdf engine parity", () => {
     expect(out).toContain("Trailing paragraph after the table.");
   });
 });
+
+describe("running header and footer stripping", () => {
+  const FOOTER = "arXiv:2305.07147v1 [cs.CL] 12 May 2025";
+  const HEADER = "Journal of Assorted Findings";
+
+  it("strips footers repeated across pages at the page edge", async () => {
+    const pages = Array.from({ length: 3 }, (_, i) => [
+      { text: `Body paragraph ${i + 1}.`, y: 600 },
+      { text: FOOTER, y: 750 },
+    ]);
+    const out = await extractPdfText(makePdf(pages));
+    expect(out).toContain("Body paragraph 1");
+    expect(out).toContain("Body paragraph 3");
+    expect(out).not.toContain("arXiv:2305.07147v1");
+  });
+
+  it("strips headers repeated at the top edge", async () => {
+    const pages = Array.from({ length: 3 }, (_, i) => [
+      { text: HEADER, y: 50 },
+      { text: `Body paragraph ${i + 1}.`, y: 600 },
+    ]);
+    const out = await extractPdfText(makePdf(pages));
+    expect(out).toContain("Body paragraph 2");
+    expect(out).not.toContain("Journal of Assorted Findings");
+  });
+
+  it("strips page numbers at a fixed edge position", async () => {
+    const pages = [1, 2, 3].map((n) => [
+      { text: `Body paragraph ${n}.`, y: 600 },
+      { text: String(n), y: 750 },
+    ]);
+    const out = await extractPdfText(makePdf(pages));
+    expect(out).toContain("Body paragraph 3");
+    expect(out).not.toMatch(/^\d{1,4}$/m);
+  });
+
+  it("keeps edge lines that appear on a single page", async () => {
+    const out = await extractPdfText(
+      makePdf([
+        [{ text: "Body one.", y: 600 }],
+        [
+          { text: "Body two.", y: 600 },
+          { text: "One-off footer.", y: 750 },
+        ],
+      ]),
+    );
+    expect(out).toContain("One-off footer.");
+  });
+
+  it("keeps edge lines on single-page documents", async () => {
+    const out = await extractPdfText(
+      makePdf([[{ text: "Body.", y: 600 }, { text: "Footer.", y: 750 }]]),
+    );
+    expect(out).toContain("Footer.");
+  });
+
+  it("keeps repeated lines outside the page-edge band", async () => {
+    const pages = Array.from({ length: 3 }, (_, i) => [
+      { text: "Repeated mid-page note.", y: 400 },
+      { text: `Body paragraph ${i + 1}.`, y: 600 },
+    ]);
+    const out = await extractPdfText(makePdf(pages));
+    expect(out).toContain("Repeated mid-page note.");
+  });
+
+  it("keeps a one-off numeric line that shares a position with a footer", async () => {
+    const footer = "Annual Report 2025";
+    const out = await extractPdfText(
+      makePdf([
+        [{ text: "Body one.", y: 600 }, { text: footer, y: 750 }],
+        [{ text: "Body two.", y: 600 }, { text: footer, y: 750 }],
+        [{ text: "Body three.", y: 600 }, { text: "42", y: 750 }],
+      ]),
+    );
+    expect(out).toContain("42");
+    expect(out).not.toContain("Annual Report 2025");
+  });
+
+  it("counts a repeated edge line once per page", async () => {
+    const out = await extractPdfText(
+      makePdf([
+        [
+          { text: "Body one.", y: 600 },
+          { text: "Duplicated footer.", y: 746.9 },
+          { text: "Duplicated footer.", y: 750.9 },
+        ],
+        [{ text: "Body two.", y: 600 }],
+      ]),
+    );
+    expect(out).toContain("Duplicated footer.");
+  });
+
+  it("does not fall back to plain text when stripping leaves a short body", async () => {
+    const line = "The quick brown fox jumps over the lazy dog. ";
+    const body = Array.from({ length: 4 }, (_, i) => ({ text: line, y: 600 - i * 20 }));
+    const footer = "Confidential draft for internal use only. ".repeat(3);
+    const pages = Array.from({ length: 2 }, (_, i) => [
+      ...body,
+      { text: footer, y: 750 },
+    ]);
+    const out = await extractPdfText(makePdf(pages));
+    expect(out).toContain("The quick brown fox");
+    expect(out).not.toContain("Confidential draft");
+  });
+});

@@ -59,7 +59,8 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   slow tool calls are not silent.
 - PDF text extraction via the official MuPDF.js engine (the same C library pymupdf wraps):
   object streams, all filters, ToUnicode fonts, encryption detection, and a
-  pymupdf4llm-style markdown layer (headings, bold/italic, code fences, links, tables)
+  pymupdf4llm-style markdown layer (headings, bold/italic, code fences, links, tables),
+  running header/footer and page-number stripping,
   with Studio's corrupted/incomplete fallback to plain text.
 - Content sniffing: MIME allow/deny, binary magic signatures, PDF magic detection, and charset
   decoding (BOM sniffing for UTF-8/16/32 first, then the declared charset, `<meta charset>` sniffing for
@@ -83,6 +84,11 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   whole line instead of per-span; superscript, subscript, underline, strikeout, and
   highlight markers are not emitted. Tables use a conservative text-grid detector:
   aligned text tables are detected, drawn-rule-only tables are not.
+- Running headers and footers: lines repeated at the same page-edge position on at
+  least half the pages (two pages minimum) are dropped from the markdown layer, as is
+  any numeric-only line at a fixed edge position where page numbers appear on at least
+  half the pages (so a one-off number sharing that position is dropped too, while fused
+  labels like `Page 3 of 12` survive). Studio and pymupdf4llm return them verbatim.
 - Search engines: Node's `fetch` TLS fingerprint differs from ddgs's `primp`
   impersonation, so Google/Brave/Yahoo/Yandex may block or serve consent pages more
   aggressively (a blocked engine simply contributes no results). User agents are a
