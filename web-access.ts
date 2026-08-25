@@ -98,6 +98,16 @@ function compressGroups(groups: string[]): string {
   return [...head, "", ...tail].join(":");
 }
 
+const PCP_ANYCAST = new Set(["2001:1::1", "2001:1::2"]);
+
+function isPcpAnycast(lower: string): boolean {
+  try {
+    return PCP_ANYCAST.has(compressIpv6(lower));
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeWebsitePolicy(value: unknown): WebsitePolicy {
   if (value === null || value === undefined) {
     return { allowedDomains: [], blockedDomains: [] };
@@ -353,6 +363,7 @@ export function isPublicIp(ip: string): boolean {
     if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return false;
     if (o[0] === 192 && o[1] === 0 && o[2] === 0) return false;
     if (o[0] === 192 && o[1] === 0 && o[2] === 2) return false;
+    if (o[0] === 192 && o[1] === 88 && o[2] === 99) return false;
     if (o[0] === 192 && o[1] === 168) return false;
     if (o[0] === 198 && (o[1] === 18 || o[1] === 19)) return false;
     if (o[0] === 198 && o[1] === 51 && o[2] === 100) return false;
@@ -370,6 +381,8 @@ export function isPublicIp(ip: string): boolean {
   if (lower.startsWith("2001:10:")) return false;
   if (lower.startsWith("2002:")) return false;
   if (lower.startsWith("2001:0:") || lower.startsWith("2001::")) return false;
+  if (lower.startsWith("2001:2:")) return false;
+  if (isPcpAnycast(lower)) return false;
   const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
   if (mapped) return isPublicIp(mapped[1]);
   if (lower.startsWith("::ffff:")) return false;

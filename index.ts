@@ -5,6 +5,10 @@ import { fetchPageText } from "./web-fetch.ts";
 
 const FETCH_TIMEOUT_MS = 60_000;
 
+function positiveMaxChars(value: unknown): number | undefined {
+  return typeof value === "number" && value > 0 ? value : undefined;
+}
+
 const WebSearchParams = Type.Object({
   query: Type.Optional(
     Type.String({ description: "The search query" }),
@@ -13,6 +17,12 @@ const WebSearchParams = Type.Object({
     Type.String({
       description:
         "A URL to fetch full page content from (instead of searching). Use this to read a page found in search results.",
+    }),
+  ),
+  maxChars: Type.Optional(
+    Type.Number({
+      description:
+        "Truncate the fetched page to this many characters (only used with the url parameter)",
     }),
   ),
 });
@@ -47,6 +57,7 @@ export default function (pi: ExtensionAPI) {
               text: await fetchPageText(params.url.trim(), {
                 timeoutMs: FETCH_TIMEOUT_MS,
                 signal: signal ?? undefined,
+                maxChars: positiveMaxChars(params.maxChars),
               }),
             },
           ],
@@ -71,10 +82,7 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "Fetch a web page and return readable text content",
     parameters: WebFetchParams,
     async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
-      const maxChars =
-        typeof params.maxChars === "number" && params.maxChars > 0
-          ? params.maxChars
-          : undefined;
+      const maxChars = positiveMaxChars(params.maxChars);
       const text = await fetchPageText(params.url, {
         timeoutMs: FETCH_TIMEOUT_MS,
         signal: signal ?? undefined,

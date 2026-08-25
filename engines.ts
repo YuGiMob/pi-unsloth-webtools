@@ -47,6 +47,41 @@ export function normalizeUrl(url: string): string {
   }
 }
 
+const TRACKING_PARAM_NAMES = new Set([
+  "_hsenc",
+  "_hsmi",
+  "dclid",
+  "fbclid",
+  "gbraid",
+  "gclid",
+  "gclsrc",
+  "igshid",
+  "mc_cid",
+  "mc_eid",
+  "msclkid",
+  "srsltid",
+  "twclid",
+  "wbraid",
+  "yclid",
+]);
+
+export function canonicalizeHref(href: string): string {
+  if (!href) return "";
+  try {
+    const url = new URL(href);
+    for (const key of [...url.searchParams.keys()]) {
+      const lower = key.toLowerCase();
+      if (lower.startsWith("utm_") || TRACKING_PARAM_NAMES.has(lower)) {
+        url.searchParams.delete(key);
+      }
+    }
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return href;
+  }
+}
+
 export interface DomNode {
   tag: string;
   attrs: Record<string, string>;
@@ -745,10 +780,10 @@ export class ResultsAggregator {
   }
 
   append(item: SearchResult): void {
-    const key = item.href;
+    const key = canonicalizeHref(item.href);
     const existing = this.cache.get(key);
     if (!existing || item.body.length > existing.body.length) {
-      this.cache.set(key, item);
+      this.cache.set(key, { ...item, href: key });
     }
     this.counter.set(key, (this.counter.get(key) ?? 0) + 1);
   }

@@ -60,7 +60,7 @@ describe("github readme rewrite", () => {
 
   it("converts an html readme from the api instead of falling back", async () => {
     const htmlReadme =
-      "<!doctype html><html><body>" +
+      "<!doctype html><html><head><title>Project Docs</title></head><body>" +
       "<h1>Project Title</h1>" +
       "<p>Install with the one-line script and read the docs.</p>" +
       "</body></html>";
@@ -71,6 +71,7 @@ describe("github readme rewrite", () => {
     };
     const out = await fetchPageText("https://github.com/unslothai/unsloth", { rawFetch });
     expect(out).toContain("README of https://github.com/unslothai/unsloth");
+    expect(out).toContain("Title: Project Docs");
     expect(out).toContain("Project Title");
     expect(out).toContain("Install with the one-line script");
     expect(out).not.toContain("<html");
@@ -172,6 +173,71 @@ describe("fetch_page_text conversion paths", () => {
       rawFetch,
     });
     expect(out).toContain("    indented code");
+  });
+
+  it("prefixes html pages with the document title", async () => {
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><head><title>Pi Docs &amp; Guides</title></head><body><main><h1>Doc</h1><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(out.startsWith("Title: Pi Docs & Guides")).toBe(true);
+    expect(out).toContain("Readable body text here.");
+  });
+
+  it("omits the title prefix for pages without a title element", async () => {
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><body><main><h1>Doc</h1><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(out).not.toContain("Title:");
+    expect(out).toContain("Readable body text here.");
+  });
+
+  it("ignores svg and template titles when extracting the document title", async () => {
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><head><title>Real Docs</title></head><body>" +
+        "<svg><title>Decorative label</title></svg>" +
+        "<template><title>Template junk</title></template>" +
+        "<main><h1>Doc</h1><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(out.startsWith("Title: Real Docs")).toBe(true);
+    expect(out).not.toContain("Decorative label");
+    expect(out).not.toContain("Template junk");
+  });
+
+  it("uses only the first title element when titles repeat", async () => {
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><head><title>First Title</title><title>Second Title</title></head><body><main><h1>Doc</h1><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(out.startsWith("Title: First Title")).toBe(true);
+    expect(out).not.toContain("Second Title");
+  });
+
+  it("ignores svg and template titles that precede the document title", async () => {
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><head><svg><title>Decorative label</title></svg><template><title>Template junk</title></template><title>Real Docs</title></head><body><main><h1>Doc</h1><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(out.startsWith("Title: Real Docs")).toBe(true);
+    expect(out).not.toContain("Decorative label");
+    expect(out).not.toContain("Template junk");
   });
 
   it("converts html bodies with the main-content heuristic", async () => {

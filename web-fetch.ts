@@ -9,7 +9,7 @@ import {
   normalizeUrlScheme,
   type WebsitePolicy,
 } from "./web-access.ts";
-import { htmlToMarkdown } from "./html-to-md.ts";
+import { decodeHtmlEntities, feedHtml, htmlToMarkdown } from "./html-to-md.ts";
 import { INVALID_CHARREFS } from "./entities.ts";
 import { extractPdfText, PdfParseError } from "./pdf.ts";
 import { randomUserAgent } from "./user-agents.ts";
@@ -737,6 +737,57 @@ export function truncatePageText(text: string, maxChars?: number): string {
   return text;
 }
 
+const NON_DOCUMENT_TITLE_TAGS = new Set(["math", "noscript", "svg", "template"]);
+
+function extractPageTitle(html: string): string {
+  let inTitle = false;
+  let done = false;
+  let skipDepth = 0;
+  const parts: string[] = [];
+  feedHtml(html, {
+    handleStartTag(name: string) {
+      if (NON_DOCUMENT_TITLE_TAGS.has(name)) {
+        skipDepth++;
+        return;
+      }
+      if (skipDepth) return;
+      if (name === "title" && !done) {
+        inTitle = true;
+      } else if (inTitle) {
+        inTitle = false;
+      }
+    },
+    handleStartEndTag() {},
+    handleEndTag(name: string) {
+      if (NON_DOCUMENT_TITLE_TAGS.has(name)) {
+        skipDepth = Math.max(0, skipDepth - 1);
+        return;
+      }
+      if (skipDepth) return;
+      if (name === "title") {
+        inTitle = false;
+        done = true;
+      }
+    },
+    handleData(text: string) {
+      if (inTitle) parts.push(text);
+    },
+    handleEntityRef(name: string) {
+      if (inTitle) parts.push(decodeHtmlEntities(`&${name};`));
+    },
+    handleCharRef(name: string) {
+      if (inTitle) parts.push(decodeHtmlEntities(`&#${name};`));
+    },
+  });
+  return parts.join("").replace(/\s+/g, " ").trim();
+}
+
+function titlePrefixedMarkdown(html: string): string {
+  const title = extractPageTitle(html);
+  const markdown = htmlToMarkdown(html, true);
+  return title ? `Title: ${title}\n\n${markdown}` : markdown;
+}
+
 export async function fetchPageText(
   url: string,
   options: FetchPageOptions = {},
@@ -770,7 +821,7 @@ export async function fetchPageText(
     if (readmeResult.error === null && readmeResult.body.trim()) {
       let readmeBody = readmeResult.body;
       if (looksLikeHtmlDocument(readmeBody)) {
-        const converted = htmlToMarkdown(readmeBody, true);
+        const converted = titlePrefixedMarkdown(readmeBody);
         if (converted.trim()) readmeBody = converted;
       }
       if (readmeBody.trim()) {
@@ -795,5 +846,5 @@ export async function fetchPageText(
   const isHtml = result.contentType.includes("html") || looksLikeHtml(result.body);
   if (!isHtml) return truncatePageText(result.body.trim(), maxChars);
 
-  return truncatePageText(htmlToMarkdown(result.body, true), maxChars);
+  return truncatePageText(titlePrefixedMarkdown(result.body), maxChars);
 }

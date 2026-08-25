@@ -5,6 +5,7 @@ import {
   SearchCancelled,
   SearchTimeoutError,
   autoTextSearch,
+  canonicalizeHref,
   extractResults,
   normalizeText,
   normalizeUrl,
@@ -34,6 +35,25 @@ describe("normalizers", () => {
     expect(normalizeUrl("https://example.com/a%20b?q=1")).toBe("https://example.com/a+b?q=1");
     expect(normalizeUrl("https://example.com/x y")).toBe("https://example.com/x+y");
     expect(normalizeUrl("")).toBe("");
+  });
+});
+
+describe("canonicalizeHref", () => {
+  it("strips tracking parameters and fragments", () => {
+    expect(canonicalizeHref("https://x.com/a?utm_source=rss&utm_medium=feed&b=7")).toBe("https://x.com/a?b=7");
+    expect(canonicalizeHref("https://x.com/a?fbclid=abc&gclid=def&q=1")).toBe("https://x.com/a?q=1");
+    expect(canonicalizeHref("https://x.com/a?srsltid=abc&msclkid=def&gbraid=ghi&wbraid=jkl&yclid=mno&gclsrc=aw.ds&page=2")).toBe("https://x.com/a?page=2");
+    expect(canonicalizeHref("https://x.com/a#section")).toBe("https://x.com/a");
+  });
+
+  it("keeps non-tracking parameters and paths", () => {
+    expect(canonicalizeHref("https://x.com/a?page=2&sort=asc")).toBe("https://x.com/a?page=2&sort=asc");
+    expect(canonicalizeHref("https://x.com/a/b?q=1")).toBe("https://x.com/a/b?q=1");
+  });
+
+  it("returns unparsable input unchanged", () => {
+    expect(canonicalizeHref("not a url")).toBe("not a url");
+    expect(canonicalizeHref("")).toBe("");
   });
 });
 
@@ -116,6 +136,28 @@ describe("ResultsAggregator", () => {
     expect(out[0].body).toBe("body b");
     expect(out[1].title).toBe("A2");
     expect(out[1].body).toBe("a much longer body");
+  });
+
+  it("merges duplicates that differ only by tracking parameters", () => {
+    const aggregator = new ResultsAggregator();
+    aggregator.extend([
+      { title: "A", href: "https://x.com/p?utm_source=rss", body: "short" },
+      { title: "A", href: "https://x.com/p?utm_source=news&utm_medium=rss", body: "longer body" },
+      { title: "A", href: "https://x.com/p", body: "longest body here" },
+    ]);
+    const out = aggregator.extractDicts();
+    expect(out.length).toBe(1);
+    expect(out[0].body).toBe("longest body here");
+    expect(out[0].href).toBe("https://x.com/p");
+  });
+
+  it("keeps pages apart when non-tracking parameters differ", () => {
+    const aggregator = new ResultsAggregator();
+    aggregator.extend([
+      { title: "A", href: "https://x.com/p?page=1", body: "first" },
+      { title: "A", href: "https://x.com/p?page=2", body: "second" },
+    ]);
+    expect(aggregator.extractDicts().length).toBe(2);
   });
 });
 

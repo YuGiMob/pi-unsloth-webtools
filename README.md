@@ -26,11 +26,15 @@ Mirrors Unsloth Studio's `web_search` tool:
 
 - Searches exactly like Studio's pinned `ddgs==9.14.4` `DDGS.text()`: the same seven engines
   (duckduckgo, brave, google, mojeek, yahoo, yandex, wikipedia; bing is disabled upstream),
-  the same provider deduplication, href-dedupe aggregator with frequency ordering, and the
-  same `SimpleFilterRanker` re-ranking. Formats results identically: `Title:` / `URL:` /
+  the same provider deduplication, href-dedupe aggregator with frequency ordering (hrefs are
+  canonicalized first — `utm_*`/tracking parameters and fragments are dropped and the URL is
+  re-serialized, collapsing host-case, default-port, and trailing-slash variants — so the
+  same page found via different tracking links collapses), and the same `SimpleFilterRanker`
+  re-ranking. Formats results identically: `Title:` / `URL:` /
   `Snippet:` blocks separated by `---`, ending with the hint to pass `{"url": "<URL>"}` to
   read a full page.
-- Accepts an optional `url` parameter; when given, fetches that page's text instead of searching.
+- Accepts an optional `url` parameter; when given, fetches that page's text instead of
+  searching (optionally truncated with `maxChars`).
 - Rate-limit, timeout, and empty-result messages mirror Studio's `_search_failure_message`.
 
 ### web_fetch
@@ -62,10 +66,13 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   stripping (`hidden`, `aria-hidden`, inline styles); `<article>`/`<main>` main-content scoping
   with link-density header stripping; boilerplate-line removal.
 - No page-size budget: fetched pages and PDFs are returned in full (Studio's window-aware
-  cap is deliberately dropped; the optional `maxChars` parameter still truncates when given).
+  cap is deliberately dropped; the optional `maxChars` parameter still truncates when given,
+  on `web_fetch` and on `web_search`'s url mode).
   The 512 KiB / 10 MiB download caps still bound the raw fetch.
 - HTML entity decoding replicates CPython's `html.unescape` (full 2,231-entry HTML5 table,
   longest-prefix rule, Windows-1252 numeric mappings), matching Studio byte-for-byte.
+- Fetched HTML pages are prefixed with the decoded document `<title>`, so the model can
+  see which page it is reading.
 
 ## Known differences from Studio
 
@@ -85,6 +92,9 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   worst-case wall time.
 - Proxies: Studio routes through environment proxies; this port always connects
   directly with DNS pinning (deliberately out of scope).
+- Dedup and titles: the aggregator keys on canonicalized hrefs (`utm_*`/tracking parameters
+  and fragments stripped, then the URL re-serialized); fetched HTML pages are prefixed with
+  the document `<title>`. Studio keys on raw hrefs and returns the converted body alone.
 
 ## Development
 

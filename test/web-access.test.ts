@@ -108,6 +108,12 @@ describe("isPublicIp", () => {
     expect(isPublicIp("fd12::1")).toBe(false);
     expect(isPublicIp("ff02::1")).toBe(false);
     expect(isPublicIp("::ffff:192.168.1.1")).toBe(false);
+    expect(isPublicIp("192.88.99.1")).toBe(false);
+    expect(isPublicIp("2001:1::1")).toBe(false);
+    expect(isPublicIp("2001:1::2")).toBe(false);
+    expect(isPublicIp("2001:2::1")).toBe(false);
+    expect(isPublicIp("2001:1:0:0:0:0:0:1")).toBe(false);
+    expect(isPublicIp("2001:1:0:0:0:0:0:2")).toBe(false);
   });
 
   it("blocks ipv4-embedding tunnel prefixes", () => {
