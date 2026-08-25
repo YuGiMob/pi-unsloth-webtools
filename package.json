@@ -1,6 +1,6 @@
 {
   "name": "pi-unsloth-webtools",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "type": "module",
   "description": "Pi extension: web_search and web_fetch tools ported from the Unsloth Studio codebase (DuckDuckGo search, SSRF-safe direct fetching, HTML-to-Markdown extraction)",
   "main": "index.ts",

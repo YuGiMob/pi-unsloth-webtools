@@ -249,4 +249,10 @@ describe("truncatePageText", () => {
   it("reports empty pages", () => {
     expect(truncatePageText("", 1000)).toBe("(page returned no readable text)");
   });
+
+  it("does not split surrogate pairs at the maxChars boundary", () => {
+    const out = truncatePageText("😀".repeat(100), 149);
+    expect(out.indexOf("\n\n")).toBe(148);
+    expect(out).toContain("(truncated, 200 chars total)");
+  });
 });

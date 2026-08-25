@@ -691,7 +691,7 @@ const MOJEEK: Engine = {
 const YAHOO: Engine = {
   name: "yahoo",
   provider: "bing",
-  async search(query, ctx, timeoutMs, signal) {
+  async search(query, _ctx, timeoutMs, signal) {
     const ylt = tokenUrlSafe(18);
     const ylu = tokenUrlSafe(35);
     const html = await httpGet(
@@ -717,7 +717,7 @@ const YAHOO: Engine = {
 const YANDEX: Engine = {
   name: "yandex",
   provider: "yandex",
-  async search(query, ctx, timeoutMs, signal) {
+  async search(query, _ctx, timeoutMs, signal) {
     const searchid = 1000000 + Math.floor(Math.random() * 9000000);
     const html = await httpGet(
       "https://yandex.com/search/site/",
@@ -874,6 +874,7 @@ export async function autoTextSearch(
     for (let attempt = 0; attempt < 2 && results === null; attempt++) {
       const budgetLeft = deadline - Date.now();
       if (budgetLeft <= 0) return;
+      if (attempt > 0 && budgetLeft < ENGINE_RETRY_BACKOFF_MS) return;
       const remaining = Math.max(1, budgetLeft);
       try {
         results = await engine.search(query, ctx, remaining, signal);

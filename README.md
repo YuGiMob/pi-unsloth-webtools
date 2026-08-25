@@ -37,7 +37,8 @@ Mirrors Unsloth Studio's `web_search` tool:
   searching (optionally truncated with `maxChars`).
 - Rate-limit, timeout, and empty-result messages mirror Studio's `_search_failure_message`.
 - Transient engine failures (network errors or null responses) are retried once with a short
-  backoff inside the same timeout budget; timeouts and cancellations are never retried.
+  backoff inside the same timeout budget (a retry that cannot fit in the remaining budget is
+  skipped); timeouts and cancellations are never retried.
 
 ### web_fetch
 
@@ -50,7 +51,8 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 - DNS resolution with SSRF protection: every resolved address is validated against
   private/loopback/link-local/CGNAT/documentation/multicast/reserved ranges, then the validated IP
   is pinned for the connection (custom `lookup` + SNI `servername`), so DNS cannot rebind between
-  validation and fetch.
+  validation and fetch; resolution shares the caller's abort signal and the overall deadline,
+  so a stuck resolver cannot outlive the fetch.
 - GitHub repo root pages are rewritten to the unauthenticated README API
   (`Accept: application/vnd.github.raw+json`), falling back to the raw README URL
   (`raw.githubusercontent.com`, no API rate limit) and then to the HTML page on failure.

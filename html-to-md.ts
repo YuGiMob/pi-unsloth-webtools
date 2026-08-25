@@ -194,7 +194,7 @@ class HeaderFrame {
 const CHARREF_RE = /&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)/g;
 
 export function decodeHtmlEntities(text: string): string {
-  return text.replace(CHARREF_RE, (whole, s: string) => {
+  return text.replace(CHARREF_RE, (_whole, s: string) => {
     if (s[0] === "#") {
       const hex = s[1] === "x" || s[1] === "X";
       const num = parseInt(s.slice(hex ? 2 : 1).replace(/;+$/, ""), hex ? 16 : 10);

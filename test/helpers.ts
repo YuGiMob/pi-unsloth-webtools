@@ -7,8 +7,6 @@ import type {
 import { fetchPageText } from "../web-fetch.ts";
 import { deflateSync } from "node:zlib";
 
-const deflate = deflateSync;
-
 export function fakeResolve(ip = "93.184.216.34"): ResolvedHost {
   return { ok: true, reason: "", ip, family: 4 };
 }

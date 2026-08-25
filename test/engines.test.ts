@@ -14,7 +14,14 @@ import {
   xpathText,
 } from "../engines.ts";
 import { buildDom } from "../engines.ts";
-import type { DomNode } from "../engines.ts";
+
+function ddgResultsHtml(count: number): string {
+  return Array.from(
+    { length: count },
+    (_, i) =>
+      `<div class="result"><div class="body"><h2><a href="https://example.com/${i}">Result ${i}</a></h2><a href="https://example.com/${i}">Snippet ${i}.</a></div></div>`
+  ).join("");
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -338,12 +345,7 @@ describe("engine retry", () => {
         if (String(url).includes("html.duckduckgo.com")) {
           ddgCalls++;
           if (ddgCalls === 1) throw new TypeError("fetch failed");
-          const items = Array.from(
-            { length: 5 },
-            (_, i) =>
-              `<div class="result"><div class="body"><h2><a href="https://example.com/${i}">Result ${i}</a></h2><a href="https://example.com/${i}">Snippet ${i}.</a></div></div>`,
-          ).join("");
-          return new Response(items, { status: 200 });
+          return new Response(ddgResultsHtml(5), { status: 200 });
         }
         return new Response(null, { status: 200 });
       }),
@@ -361,12 +363,7 @@ describe("engine retry", () => {
         if (String(url).includes("html.duckduckgo.com")) {
           ddgCalls++;
           if (ddgCalls === 1) return new Response("blocked", { status: 403 });
-          const items = Array.from(
-            { length: 5 },
-            (_, i) =>
-              `<div class="result"><div class="body"><h2><a href="https://example.com/${i}">Result ${i}</a></h2><a href="https://example.com/${i}">Snippet ${i}.</a></div></div>`,
-          ).join("");
-          return new Response(items, { status: 200 });
+          return new Response(ddgResultsHtml(5), { status: 200 });
         }
         return new Response(null, { status: 200 });
       }),
@@ -399,6 +396,19 @@ describe("engine retry", () => {
     );
     await expect(autoTextSearch("cat", 100, 60)).rejects.toThrow(EmptySweepError);
   }, 5_000);
+
+  it("does not launch a retry that cannot fit the remaining budget", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await expect(autoTextSearch("cat", 5, 400)).rejects.toThrow(EmptySweepError);
+    expect(calls).toBe(4);
+  });
 });
 
 describe("engine request headers", () => {
@@ -409,12 +419,7 @@ describe("engine request headers", () => {
       vi.fn((url: string, init?: RequestInit) => {
         calls.push({ url: String(url), init });
         if (String(url).includes("html.duckduckgo.com")) {
-          const items = Array.from(
-            { length: 5 },
-            (_, i) =>
-              `<div class="result"><div class="body"><h2><a href="https://example.com/${i}">Result ${i}</a></h2><a href="https://example.com/${i}">Snippet ${i}.</a></div></div>`
-          ).join("");
-          return Promise.resolve(new Response(items, { status: 200 }));
+          return Promise.resolve(new Response(ddgResultsHtml(5), { status: 200 }));
         }
         return Promise.resolve(new Response(null, { status: 200 }));
       }),

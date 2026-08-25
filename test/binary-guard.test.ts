@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isTextCandidateContentType } from "../web-fetch.ts";
-import { fakeResolve, fetchWith, makePdf, seamWithResponse } from "./helpers.ts";
+import { fakeResolve, fetchWith, makePdf } from "./helpers.ts";
 
 function contentTypeMatrix() {
   return [

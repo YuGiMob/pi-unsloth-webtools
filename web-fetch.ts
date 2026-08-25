@@ -15,7 +15,7 @@ import {
 import { collapseWhitespace, decodeHtmlEntities, feedHtml, htmlToMarkdown } from "./html-to-md.ts";
 import type { AttrDict } from "./html-to-md.ts";
 import { INVALID_CHARREFS } from "./entities.ts";
-import { extractPdfText, PdfParseError } from "./pdf.ts";
+import { extractPdfText } from "./pdf.ts";
 import { randomUserAgent } from "./user-agents.ts";
 
 const MAX_FETCH_BYTES = 512 * 1024;
@@ -23,6 +23,7 @@ const MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
 const META_VALUE_MAX_CHARS = 300;
 const MAX_PDF_FETCH_BYTES = 10 * 1024 * 1024;
 const MAX_REQUESTS = 5;
+const MAX_SIGNAL_TIMEOUT_MS = 2 ** 31 - 1;
 export const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
 
 const UTF32_LE_BOM = Buffer.from([0xff, 0xfe, 0x00, 0x00]);
@@ -203,8 +204,14 @@ export interface RawFetchResult {
 }
 
 function htmlProbe(body: string, re: RegExp): boolean {
-  const probe = body.replace(/^[ \t\n\r\f\v]+/, "").slice(0, 256).toLowerCase();
-  return re.test(probe);
+  let probe = body;
+  while (true) {
+    probe = probe.replace(/^[ \t\n\r\f\v]+/, "");
+    const stripped = probe.replace(/^(?:<!--[\s\S]*?-->|<\?[\s\S]*?\?>)/, "");
+    if (stripped === probe) break;
+    probe = stripped;
+  }
+  return re.test(probe.slice(0, 256).toLowerCase());
 }
 
 export function looksLikeHtml(body: string): boolean {
@@ -448,10 +455,32 @@ function decodeTis620(bytes: Buffer): string {
 }
 
 
+function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException("aborted", "AbortError"));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promise<ResolvedHost> {
   let addresses: { address: string; family: number }[];
   try {
-    addresses = await dnsLookup(hostname, { all: true, verbatim: true });
+    addresses = await withAbort(dnsLookup(hostname, { all: true, verbatim: true }), signal);
   } catch (err) {
     return { ok: false, reason: `Failed to resolve host: ${err}`, ip: "", family: 0 };
   }
@@ -545,13 +574,16 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
           }
         });
       };
+      const timeoutAndDestroy = () => {
+        decoder?.destroy();
+        res.destroy();
+        finish("timed out", Buffer.concat(chunks));
+      };
       const acceptData = (chunk: Buffer) => {
         if (settled) return;
         const now = opts.nowMs ?? Date.now;
         if (opts.deadlineMs !== undefined && now() >= opts.deadlineMs) {
-          decoder?.destroy();
-          res.destroy();
-          finish("timed out", Buffer.concat(chunks));
+          timeoutAndDestroy();
           return;
         }
         if (head.length < 1024) {
@@ -625,9 +657,7 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
           if (settled) return;
           const now = opts.nowMs ?? Date.now;
           if (opts.deadlineMs !== undefined && now() >= opts.deadlineMs) {
-            decoder?.destroy();
-            res.destroy();
-            finish("timed out", Buffer.concat(chunks));
+            timeoutAndDestroy();
             return;
           }
           if (!outputStarted && !rawFallbackTried && rawBufferBytes < limit) {
@@ -670,6 +700,15 @@ export async function fetchUrlRaw(
   const seams = options.seams ?? {};
   const resolveHost = seams.resolve ?? resolveAndValidate;
   const performRequest = seams.request ?? requestHop;
+  const resolveWithBudget = async (hostname: string): Promise<ResolvedHost> => {
+    const deadlineSignal = AbortSignal.timeout(Math.min(MAX_SIGNAL_TIMEOUT_MS, Math.max(1, deadline - now())));
+    const resolveSignal = signal ? AbortSignal.any([signal, deadlineSignal]) : deadlineSignal;
+    const resolved = await resolveHost(hostname, resolveSignal);
+    if (resolved.ok) return resolved;
+    if (signal?.aborted) return { ...resolved, reason: FETCH_CANCELLED_MESSAGE };
+    if (resolveSignal.aborted) return { ...resolved, reason: FETCH_TIMEOUT_MESSAGE };
+    return resolved;
+  };
 
   url = normalizeUrlScheme(url);
   const [allowed, reason, hostname] = checkUrlAccess(url, policy);
@@ -677,7 +716,7 @@ export async function fetchUrlRaw(
 
   const budgetResult = budgetExceededResult(deadline, signal, now);
   if (budgetResult !== null) return budgetResult;
-  let resolved = await resolveHost(hostname, signal);
+  let resolved = await resolveWithBudget(hostname);
   if (!resolved.ok) return { error: resolved.reason, body: "", contentType: "" };
 
   let currentUrl = url;
@@ -739,7 +778,7 @@ export async function fetchUrlRaw(
         policy,
       );
       if (!redirectAllowed) return { error: redirectReason, body: "", contentType: "" };
-      const redirected = await resolveHost(redirectHost, signal);
+      const redirected = await resolveWithBudget(redirectHost);
       if (!redirected.ok) return { error: redirected.reason, body: "", contentType: "" };
       pinnedIp = redirected.ip;
       pinnedFamily = redirected.family;
@@ -853,7 +892,7 @@ export function truncatePageText(text: string, maxChars?: number): string {
     const hadCapNotice = text.endsWith(TRUNCATED_BODY_SUFFIX);
     const core = (hadCapNotice ? text.slice(0, -TRUNCATED_BODY_SUFFIX.length) : text).trimEnd();
     return (
-      core.slice(0, maxChars) +
+      cutAtCharBoundary(core, maxChars) +
       `\n\n... (truncated, ${text.length} chars total)` +
       (hadCapNotice ? TRUNCATED_BODY_NOTICE : "")
     );
@@ -925,11 +964,15 @@ const META_KEYS: Record<string, keyof PageMeta> = {
   "application-name": "site",
 };
 
-function capMetaValue(value: string): string {
-  if (value.length <= META_VALUE_MAX_CHARS) return value;
-  const sliced = value.slice(0, META_VALUE_MAX_CHARS);
+function cutAtCharBoundary(text: string, maxChars: number): string {
+  const sliced = text.slice(0, maxChars);
   const last = sliced.charCodeAt(sliced.length - 1);
   return last >= 0xd800 && last <= 0xdbff ? sliced.slice(0, -1) : sliced;
+}
+
+function capMetaValue(value: string): string {
+  if (value.length <= META_VALUE_MAX_CHARS) return value;
+  return cutAtCharBoundary(value, META_VALUE_MAX_CHARS);
 }
 
 function extractPageMeta(html: string): PageMeta {
@@ -997,16 +1040,19 @@ export async function fetchPageText(
   url = normalizeUrlScheme(url);
   const [allowed, reason] = checkUrlAccess(url, policy);
   if (!allowed) return reason;
+  const rawFetchOptions = {
+    deadlineMs,
+    signal,
+    websitePolicy: policy,
+    maxBytes: options.maxBytes,
+    maxPdfBytes: options.maxPdfBytes,
+    seams: options.seams,
+  };
 
   const readmeApiUrl = githubRepoReadmeApiUrl(url);
   if (readmeApiUrl) {
     const readmeResult = await rawFetch(readmeApiUrl, {
-      deadlineMs,
-      signal,
-      websitePolicy: policy,
-      maxBytes: options.maxBytes,
-      maxPdfBytes: options.maxPdfBytes,
-      seams: options.seams,
+      ...rawFetchOptions,
       extraHeaders: {
         Accept: "application/vnd.github.raw+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -1021,14 +1067,7 @@ export async function fetchPageText(
     }
     const rawReadmeUrl = githubRepoRawReadmeUrl(url);
     if (rawReadmeUrl) {
-      const rawResult = await rawFetch(rawReadmeUrl, {
-        deadlineMs,
-        signal,
-        websitePolicy: policy,
-        maxBytes: options.maxBytes,
-        maxPdfBytes: options.maxPdfBytes,
-        seams: options.seams,
-      });
+      const rawResult = await rawFetch(rawReadmeUrl, rawFetchOptions);
       const rawBody = rawResult.error === null ? formatReadmeBody(rawResult.body) : "";
       if (rawBody.trim()) {
         return truncatePageText(
@@ -1039,14 +1078,7 @@ export async function fetchPageText(
     }
   }
 
-  const result = await rawFetch(url, {
-    deadlineMs,
-    signal,
-    websitePolicy: policy,
-    maxBytes: options.maxBytes,
-    maxPdfBytes: options.maxPdfBytes,
-    seams: options.seams,
-  });
+  const result = await rawFetch(url, rawFetchOptions);
   if (result.error !== null) return result.error;
 
   const isHtml = result.contentType.includes("html") || looksLikeHtml(result.body);

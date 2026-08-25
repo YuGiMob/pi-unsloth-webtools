@@ -277,7 +277,7 @@ describe("running header and footer stripping", () => {
     const line = "The quick brown fox jumps over the lazy dog. ";
     const body = Array.from({ length: 4 }, (_, i) => ({ text: line, y: 600 - i * 20 }));
     const footer = "Confidential draft for internal use only. ".repeat(3);
-    const pages = Array.from({ length: 2 }, (_, i) => [
+    const pages = Array.from({ length: 2 }, () => [
       ...body,
       { text: footer, y: 750 },
     ]);
