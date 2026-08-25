@@ -510,6 +510,9 @@ async function httpPost(
 }
 
 const MAX_ENGINE_RESPONSE_BYTES = 5 * 1024 * 1024;
+const ENGINE_RETRY_BACKOFF_MS = 250;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function readBodyCapped(response: Response): Promise<string | null> {
   const declared = Number(response.headers.get("content-length") ?? "0");
@@ -773,7 +776,7 @@ const WIKIPEDIA: Engine = {
   },
 };
 
-const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, BRAVE, GOOGLE, MOJEEK, YAHOO, YANDEX, WIKIPEDIA];
+export const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, BRAVE, GOOGLE, MOJEEK, YAHOO, YANDEX, WIKIPEDIA];
 
 export class ResultsAggregator {
   private cache = new Map<string, SearchResult>();
@@ -867,16 +870,35 @@ export async function autoTextSearch(
   let i = 0;
   let pending: Promise<void>[] = [];
   const run = async (engine: Engine) => {
-    const remaining = Math.max(1, deadline - Date.now());
-    try {
-      const results = await engine.search(query, ctx, remaining, signal);
-      if (results && results.length) {
-        aggregator.extend(results);
-        seenProviders.add(engine.provider);
+    let results: SearchResult[] | null = null;
+    for (let attempt = 0; attempt < 2 && results === null; attempt++) {
+      const budgetLeft = deadline - Date.now();
+      if (budgetLeft <= 0) return;
+      const remaining = Math.max(1, budgetLeft);
+      try {
+        results = await engine.search(query, ctx, remaining, signal);
+      } catch (e) {
+        if (e instanceof SearchCancelled) {
+          cancelled = true;
+          return;
+        }
+        if (e instanceof SearchTimeoutError) {
+          timedOut = true;
+          return;
+        }
       }
-    } catch (e) {
-      if (e instanceof SearchCancelled) cancelled = true;
-      if (e instanceof SearchTimeoutError) timedOut = true;
+      if (results === null && attempt === 0) {
+        const backoff = Math.min(ENGINE_RETRY_BACKOFF_MS, Math.max(0, deadline - Date.now()));
+        if (backoff > 0) await sleep(backoff);
+        if (signal?.aborted) {
+          cancelled = true;
+          return;
+        }
+      }
+    }
+    if (results && results.length) {
+      aggregator.extend(results);
+      seenProviders.add(engine.provider);
     }
   };
   while (i < engines.length) {

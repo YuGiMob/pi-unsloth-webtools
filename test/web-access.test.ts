@@ -86,6 +86,12 @@ describe("checkUrlAccess", () => {
     expect(checkUrlAccess("https://d0.example/x", overLimit)[0]).toBe(false);
     expect(hostnameAllowed("d0.example", overLimit)).toBe(false);
   });
+
+  it("passes bracketed ipv6 hosts to the DNS layer", () => {
+    const [allowed, , hostname] = checkUrlAccess("http://[::1]:8080/x", null);
+    expect(allowed).toBe(true);
+    expect(hostname).toBe("::1");
+  });
 });
 
 describe("normalizeDomain", () => {

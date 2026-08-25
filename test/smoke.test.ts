@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fetchPageText, fetchUrlRaw, hasPdfMagic } from "../web-fetch.ts";
 import { extractPdfText } from "../pdf.ts";
 import { ddgSearch } from "../web-search.ts";
+import { TEXT_ENGINES } from "../engines.ts";
 import { deflateSync } from "node:zlib";
 
 describe("live smoke", () => {
@@ -33,6 +34,20 @@ describe("live smoke", () => {
     expect(results[0].title.length).toBeGreaterThan(0);
     expect(results[0].href).toMatch(/^https?:\/\//);
   }, 60000);
+
+  it("parses well-formed results from most engines", async () => {
+    const ctx = { region: "us-en", safesearch: "moderate" };
+    let healthy = 0;
+    for (const engine of TEXT_ENGINES) {
+      const results = await engine.search("unsloth", ctx, 20_000);
+      if (!results || !results.length) continue;
+      const wellFormed = results.filter(
+        (r) => r.title.trim().length > 0 && /^https?:\/\//.test(r.href),
+      );
+      if (wellFormed.length) healthy++;
+    }
+    expect(healthy).toBeGreaterThanOrEqual(3);
+  }, 180_000);
 
   it("rejects non-public resolution targets", async () => {
     const result = await fetchUrlRaw("http://localhost/", { timeoutMs: 10000 });

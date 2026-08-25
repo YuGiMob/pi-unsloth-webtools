@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { brotliCompressSync, deflateRawSync, deflateSync, gzipSync } from "node:zlib";
 import {
   fetchPageText,
   fetchUrlRaw,
@@ -9,12 +10,28 @@ import {
   requestHop,
 } from "../web-fetch.ts";
 import { githubRepoReadmeApiUrl } from "../web-access.ts";
-import { fakeResolve, seamWithResponse } from "./helpers.ts";
+import { fakeResolve, makePdf, seamWithResponse } from "./helpers.ts";
 import type { RawFetchSeam } from "./helpers.ts";
 import { GITHUB_PAGE } from "./fixtures.ts";
 
 function textFetch(result: { error: string | null; body: string; contentType: string }): RawFetchSeam {
   return async () => result;
+}
+
+async function withServer(
+  respond: (res: http.ServerResponse) => void,
+  run: (port: number) => Promise<void>,
+): Promise<void> {
+  const server = http.createServer((_req, res) => respond(res));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await run((server.address() as AddressInfo).port);
+  } finally {
+    await new Promise<void>((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve());
+    });
+  }
 }
 
 describe("github readme rewrite", () => {
@@ -645,5 +662,279 @@ describe("download cap truncation", () => {
     });
     expect(count(out)).toBe(1);
     expect(out).toContain("Readable body text.");
+  });
+});
+
+describe("redirect target validation", () => {
+  it("rejects a well-formed ipv6 loopback redirect through resolution", async () => {
+    const result = await fetchUrlRaw("https://example.com/start", {
+      seams: {
+        resolve: async (hostname) =>
+          hostname === "::1"
+            ? { ok: false, reason: "Blocked: refusing to fetch the non-public address ::1.", ip: "", family: 0 }
+            : { ok: true, reason: "", ip: "93.184.216.34", family: 4 },
+        request: async () => ({
+          status: 302,
+          headers: { location: "http://[::1]:8080/" },
+          body: Buffer.alloc(0),
+        }),
+      },
+    });
+    expect(result.error).toBe("Blocked: refusing to fetch the non-public address ::1.");
+    expect(result.body).toBe("");
+  });
+});
+
+describe("content-encoding decompression", () => {
+  it("decompresses gzip bodies from servers that ignore the identity request", async () => {
+    const text = "gzip encoded page text marker";
+    const encoded = gzipSync(Buffer.from(text));
+    await withServer(
+      (res) => {
+        res.writeHead(200, {
+          "content-type": "text/plain",
+          "content-encoding": "gzip",
+          "content-length": String(encoded.length),
+        });
+        res.end(encoded);
+      },
+      async (port) => {
+        const result = await fetchUrlRaw(`http://example.com:${port}/`, {
+          seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
+        });
+        expect(result.error).toBeNull();
+        expect(result.body).toBe(text);
+      },
+    );
+  });
+
+  it("decompresses deflate and brotli bodies", async () => {
+    for (const [encoding, encode] of [
+      ["deflate", deflateSync],
+      ["br", brotliCompressSync],
+    ] as const) {
+      const text = `${encoding} encoded body marker`;
+      const encoded = encode(Buffer.from(text));
+      await withServer(
+        (res) => {
+          res.writeHead(200, {
+            "content-type": "text/plain",
+            "content-encoding": encoding,
+            "content-length": String(encoded.length),
+          });
+          res.end(encoded);
+        },
+        async (port) => {
+          const result = await fetchUrlRaw(`http://example.com:${port}/`, {
+            seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
+          });
+          expect(result.error).toBeNull();
+          expect(result.body).toBe(text);
+        },
+      );
+    }
+  });
+
+  it("falls back to raw inflate for headerless deflate streams", async () => {
+    const text = "raw deflate marker";
+    const encoded = deflateRawSync(Buffer.from(text));
+    await withServer(
+      (res) => {
+        res.writeHead(200, {
+          "content-type": "text/plain",
+          "content-encoding": "deflate",
+          "content-length": String(encoded.length),
+        });
+        res.end(encoded);
+      },
+      async (port) => {
+        const result = await fetchUrlRaw(`http://example.com:${port}/`, {
+          seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
+        });
+        expect(result.error).toBeNull();
+        expect(result.body).toBe(text);
+      },
+    );
+  });
+
+  it("keeps identity bodies untouched", async () => {
+    await withServer(
+      (res) => {
+        res.writeHead(200, { "content-type": "text/plain", "content-encoding": "identity" });
+        res.end("plain body marker");
+      },
+      async (port) => {
+        const result = await fetchUrlRaw(`http://example.com:${port}/`, {
+          seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
+        });
+        expect(result.error).toBeNull();
+        expect(result.body).toBe("plain body marker");
+      },
+    );
+  });
+
+  it("marks a gzip page cut at the cap as truncated instead of binary", async () => {
+    const text = "gzip capped page marker ".repeat(200);
+    const encoded = gzipSync(Buffer.from(text));
+    await withServer(
+      (res) => {
+        res.writeHead(200, {
+          "content-type": "text/plain",
+          "content-encoding": "gzip",
+          "content-length": String(encoded.length),
+        });
+        res.end(encoded);
+      },
+      async (port) => {
+        const result = await fetchUrlRaw(`http://example.com:${port}/`, {
+          maxBytes: 512,
+          seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
+        });
+        expect(result.error).toBeNull();
+        expect(result.body).toContain("gzip capped page marker");
+        expect(result.body).toContain("(page truncated at the download limit)");
+      },
+    );
+  });
+
+  it("extends the pdf budget to gzip-encoded pdfs", async () => {
+    const pdf = makePdf(["Gzip encoded pdf marker"]);
+    const encoded = gzipSync(pdf);
+    await withServer(
+      (res) => {
+        res.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-encoding": "gzip",
+          "content-length": String(encoded.length),
+        });
+        res.end(encoded);
+      },
+      async (port) => {
+        const result = await fetchUrlRaw(`http://example.com:${port}/`, {
+          maxBytes: 256,
+          seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
+        });
+        expect(result.error).toBeNull();
+        expect(result.body).toContain("Gzip encoded pdf marker");
+      },
+    );
+  });
+
+  it("keeps the decoded prefix when a gzip stream fails mid-way", async () => {
+    const text = "gzip partial stream marker ".repeat(5000);
+    const encoded = gzipSync(Buffer.from(text));
+    const half = Math.floor(encoded.length / 2);
+    await withServer(
+      (res) => {
+        res.writeHead(200, { "content-type": "text/plain", "content-encoding": "gzip" });
+        res.write(encoded.subarray(0, half));
+        res.end();
+      },
+      async (port) => {
+        const result = await fetchUrlRaw(`http://example.com:${port}/`, {
+          seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
+        });
+        expect(result.error).toBeNull();
+        expect(result.body).toContain("gzip partial stream marker");
+        expect(result.body).toContain("(page truncated at the download limit)");
+      },
+    );
+  });
+});
+
+describe("page metadata prefix", () => {
+  it("prefixes author, date and site lines when declared", async () => {
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><head><title>Example Docs</title>" +
+        '<meta name="author" content="Jane Doe">' +
+        '<meta property="article:published_time" content="2026-07-12T10:30:00Z">' +
+        '<meta property="og:site_name" content="Example Docs">' +
+        "</head><body><main><h1>Doc</h1><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(
+      out.startsWith(
+        "Title: Example Docs\nAuthor: Jane Doe\nDate: 2026-07-12T10:30:00Z\nSite: Example Docs\n\n",
+      ),
+    ).toBe(true);
+    expect(out).toContain("Readable body text here.");
+  });
+
+  it("omits metadata lines that are not declared", async () => {
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><head><title>Plain</title></head><body><main><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(out.startsWith("Title: Plain\n\n")).toBe(true);
+    expect(out).not.toContain("\nAuthor:");
+    expect(out).not.toContain("\nDate:");
+    expect(out).not.toContain("\nSite:");
+  });
+
+  it("uses the first declaration for each field", async () => {
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><head><title>Docs</title>" +
+        '<meta name="author" content="First Author">' +
+        '<meta property="article:author" content="Second Author">' +
+        '<meta name="dc.date" content="2025-01-01">' +
+        '<meta property="article:published_time" content="2026-07-12">' +
+        "</head><body><main><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(out.startsWith("Title: Docs\nAuthor: First Author\nDate: 2025-01-01\n\n")).toBe(true);
+  });
+
+  it("reads author and date from self-closing meta tags", async () => {
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><head><title>Docs</title>" +
+        '<meta name="author" content="Jane Doe"/>' +
+        '<meta property="article:published_time" content="2026-07-12T10:30:00Z"/>' +
+        "</head><body><main><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(out.startsWith("Title: Docs\nAuthor: Jane Doe\nDate: 2026-07-12T10:30:00Z\n\n")).toBe(true);
+  });
+
+  it("collapses whitespace and caps long meta values", async () => {
+    const longAuthor = "x".repeat(400);
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><head><title>T</title>" +
+        '<meta name="author" content="  Jane   Doe  ">' +
+        `<meta property="og:site_name" content="${longAuthor}">` +
+        "</head><body><main><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(out).toContain("Author: Jane Doe");
+    expect(out).toContain(`Site: ${'x'.repeat(300)}`);
+    expect(out).not.toContain("x".repeat(301));
+  });
+
+  it("does not split surrogate pairs at the meta cap", async () => {
+    const rawFetch = textFetch({
+      error: null,
+      body:
+        "<html><head><title>T</title>" +
+        `<meta name="author" content="${'x'.repeat(299)}\u{1F600}tail">` +
+        "</head><body><main><p>Readable body text here.</p></main></body></html>",
+      contentType: "text/html",
+    });
+    const out = await fetchPageText("https://example.com/doc", { rawFetch });
+    expect(out).toContain(`Author: ${'x'.repeat(299)}\n`);
+    expect(out).not.toContain("\ufffd");
   });
 });

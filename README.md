@@ -36,13 +36,17 @@ Mirrors Unsloth Studio's `web_search` tool:
 - Accepts an optional `url` parameter; when given, fetches that page's text instead of
   searching (optionally truncated with `maxChars`).
 - Rate-limit, timeout, and empty-result messages mirror Studio's `_search_failure_message`.
+- Transient engine failures (network errors or null responses) are retried once with a short
+  backoff inside the same timeout budget; timeouts and cancellations are never retried.
 
 ### web_fetch
 
 Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 
 - URL scheme normalization (bare hosts like `google.com` become `https://google.com`).
-- URL validation: http/https only, no credentials or encoded hostnames, hostname/port checks.
+- URL validation: http/https only, no credentials or encoded hostnames, hostname/port checks (any
+  port 1–65535 is permitted; SSRF protection is enforced at the resolved-IP layer, not by port
+  allowlists).
 - DNS resolution with SSRF protection: every resolved address is validated against
   private/loopback/link-local/CGNAT/documentation/multicast/reserved ranges, then the validated IP
   is pinned for the connection (custom `lookup` + SNI `servername`), so DNS cannot rebind between
@@ -55,6 +59,12 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 - 512 KiB download cap (10 MiB for PDFs), overall deadline + per-hop socket timeouts, abort-aware
   (`signal` cancels mid-flight). Fetches cut off by a download cap are marked with a trailing
   truncation notice, so a partial page is not mistaken for a complete one.
+- Responses sent with a `Content-Encoding` of gzip, deflate, or brotli (servers that ignore the
+  `Accept-Encoding: identity` request) are decompressed while streaming, so the download caps
+  bound the decoded page text (a gzip'd PDF still gets the 10 MiB PDF budget via magic sniffing on
+  the decoded head) and a stream cut by the cap or a mid-stream decode failure returns the readable
+  decoded prefix with the truncation notice instead of a binary-content error. A 64 MiB
+  decoded-output cap bounds a compressed bomb.
 - Long fetches and searches report a short progress note to the session before they start, so
   slow tool calls are not silent.
 - PDF text extraction via the official MuPDF.js engine (the same C library pymupdf wraps):
@@ -76,7 +86,10 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 - HTML entity decoding replicates CPython's `html.unescape` (full 2,231-entry HTML5 table,
   longest-prefix rule, Windows-1252 numeric mappings), matching Studio byte-for-byte.
 - Fetched HTML pages are prefixed with the decoded document `<title>`, so the model can
-  see which page it is reading.
+  see which page it is reading. `Author:` (`meta name=author` / `article:author` / `dc.creator`),
+  `Date:` (`article:published_time` / `dc.date` / `date`) and `Site:` (`og:site_name` /
+  `application-name`) lines are added when declared, so the model can judge recency and
+  provenance.
 
 ## Known differences from Studio
 
@@ -142,7 +155,8 @@ The suite ports Unsloth Studio's own tests for these tools:
   ASCII85Decode, font `/Differences` encodings, pymupdf4llm-style headings/links/tables
 - `test/entities.test.ts`: `decodeHtmlEntities` parity with CPython `html.unescape`,
   legacy refs, longest-prefix rule, Windows-1252 numeric mappings, invalid codepoints
-- `test/smoke.test.ts`: live network checks against real hosts
+- `test/smoke.test.ts`: live network checks against real hosts, including a per-engine
+  result-health sweep (at least three engines must return well-formed results)
 
 The seams (`seams.resolve` / `seams.request` / `rawFetch`) replace the network stack
 with fakes, mirroring how the Studio suite monkeypatches `_validate_and_resolve_host`

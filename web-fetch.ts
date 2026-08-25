@@ -1,7 +1,9 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
+import { createBrotliDecompress, createGunzip, createInflate, createInflateRaw } from "node:zlib";
 import type { IncomingMessage } from "node:http";
+import type { Transform } from "node:stream";
 import {
   checkUrlAccess,
   githubRepoRawReadmeUrl,
@@ -11,11 +13,14 @@ import {
   type WebsitePolicy,
 } from "./web-access.ts";
 import { collapseWhitespace, decodeHtmlEntities, feedHtml, htmlToMarkdown } from "./html-to-md.ts";
+import type { AttrDict } from "./html-to-md.ts";
 import { INVALID_CHARREFS } from "./entities.ts";
 import { extractPdfText, PdfParseError } from "./pdf.ts";
 import { randomUserAgent } from "./user-agents.ts";
 
 const MAX_FETCH_BYTES = 512 * 1024;
+const MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
+const META_VALUE_MAX_CHARS = 300;
 const MAX_PDF_FETCH_BYTES = 10 * 1024 * 1024;
 const MAX_REQUESTS = 5;
 export const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
@@ -475,6 +480,20 @@ function budgetExceededResult(
 }
 
 
+function contentEncodingCodec(value: string | string[] | undefined): string | null {
+  const declared = Array.isArray(value) ? value[0] : value;
+  const codec = (declared ?? "").split(",", 1)[0].trim().toLowerCase();
+  if (codec === "gzip" || codec === "x-gzip" || codec === "deflate" || codec === "br") return codec;
+  return null;
+}
+
+function createDecodeStream(codec: string): Transform {
+  const options = { maxOutputLength: MAX_DECOMPRESSED_BYTES };
+  if (codec === "br") return createBrotliDecompress(options);
+  if (codec === "deflate") return createInflate(options);
+  return createGunzip(options);
+}
+
 export function requestHop(opts: HopOptions): Promise<HopResponse> {
   return new Promise((resolve, reject) => {
     const url = opts.url;
@@ -498,10 +517,12 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
       action();
     };
     const request = transport.request(options, (res: IncomingMessage) => {
+      const codec = contentEncodingCodec(res.headers["content-encoding"]);
       const chunks: Buffer[] = [];
       let total = 0;
       let head = Buffer.alloc(0);
       let truncated = false;
+      let decoder: Transform | null = null;
       const declaredPdf = String(res.headers["content-type"] ?? "").toLowerCase().includes("pdf");
       let limit = declaredPdf ? opts.maxPdfBytes : opts.maxBytes;
       let extendedForPdf = false;
@@ -524,10 +545,11 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
           }
         });
       };
-      res.on("data", (chunk: Buffer) => {
+      const acceptData = (chunk: Buffer) => {
         if (settled) return;
         const now = opts.nowMs ?? Date.now;
         if (opts.deadlineMs !== undefined && now() >= opts.deadlineMs) {
+          decoder?.destroy();
           res.destroy();
           finish("timed out", Buffer.concat(chunks));
           return;
@@ -536,7 +558,7 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
           const need = 1024 - head.length;
           head = Buffer.concat([head, chunk.subarray(0, Math.min(need, chunk.length))]);
         }
-        if (!declaredPdf && !extendedForPdf && total + chunk.length > opts.maxBytes) {
+        if (!declaredPdf && !extendedForPdf && total + chunk.length > limit) {
           if (hasPdfMagic(head)) {
             limit = opts.maxPdfBytes;
             extendedForPdf = true;
@@ -547,13 +569,82 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
         chunks.push(take);
         total += take.length;
         if (total >= limit) {
-          truncated = !(Number.isFinite(declaredLength) && declaredLength === total);
+          truncated =
+            codec !== null ||
+            !(Number.isFinite(declaredLength) && declaredLength === total);
+          decoder?.destroy();
           res.destroy();
           finish(null, Buffer.concat(chunks));
         }
+      };
+      if (codec === null) {
+        res.on("data", (chunk: Buffer) => {
+          acceptData(chunk);
+        });
+        res.on("end", () => finish(null, Buffer.concat(chunks)));
+      } else {
+        let rawBuffer: Buffer[] = [];
+        let rawBufferBytes = 0;
+        let outputStarted = false;
+        let rawFallbackTried = false;
+        let resEnded = false;
+        const wire = (d: Transform) => {
+          d.on("data", (chunk: Buffer) => {
+            outputStarted = true;
+            acceptData(chunk);
+          });
+          d.on("end", () => finish(null, Buffer.concat(chunks)));
+          d.on("drain", () => res.resume());
+          d.on("error", (err: NodeJS.ErrnoException) => {
+            if (settled) return;
+            if (
+              codec === "deflate" &&
+              !rawFallbackTried &&
+              !outputStarted &&
+              err.code === "Z_DATA_ERROR"
+            ) {
+              rawFallbackTried = true;
+              d.destroy();
+              decoder = createInflateRaw({ maxOutputLength: MAX_DECOMPRESSED_BYTES });
+              wire(decoder);
+              for (const buffered of rawBuffer) decoder.write(buffered);
+              if (resEnded) decoder.end();
+              return;
+            }
+            if (outputStarted) {
+              truncated = true;
+              finish(null, Buffer.concat(chunks));
+              return;
+            }
+            finish(null, Buffer.concat(rawBuffer));
+          });
+        };
+        decoder = createDecodeStream(codec);
+        wire(decoder);
+        res.on("data", (chunk: Buffer) => {
+          if (settled) return;
+          const now = opts.nowMs ?? Date.now;
+          if (opts.deadlineMs !== undefined && now() >= opts.deadlineMs) {
+            decoder?.destroy();
+            res.destroy();
+            finish("timed out", Buffer.concat(chunks));
+            return;
+          }
+          if (!outputStarted && !rawFallbackTried && rawBufferBytes < limit) {
+            rawBuffer.push(chunk);
+            rawBufferBytes += chunk.length;
+          }
+          if (!decoder!.write(chunk)) res.pause();
+        });
+        res.on("end", () => {
+          resEnded = true;
+          if (!settled) decoder!.end();
+        });
+      }
+      res.on("error", (err) => {
+        decoder?.destroy();
+        finish(err.message, Buffer.concat(chunks));
       });
-      res.on("end", () => finish(null, Buffer.concat(chunks)));
-      res.on("error", (err) => finish(err.message, Buffer.concat(chunks)));
     });
     const onAbort = () => request.destroy(new FetchCancelledError());
     opts.signal?.addEventListener("abort", onAbort, { once: true });
@@ -815,10 +906,68 @@ function extractPageTitle(html: string): string {
   return collapseWhitespace(parts.join(""));
 }
 
-function titlePrefixedMarkdown(html: string): string {
-  const title = extractPageTitle(html);
+interface PageMeta {
+  title: string;
+  author: string;
+  date: string;
+  site: string;
+}
+
+const META_KEYS: Record<string, keyof PageMeta> = {
+  author: "author",
+  "article:author": "author",
+  "dc.creator": "author",
+  "article:published_time": "date",
+  date: "date",
+  "dc.date": "date",
+  datepublished: "date",
+  "og:site_name": "site",
+  "application-name": "site",
+};
+
+function capMetaValue(value: string): string {
+  if (value.length <= META_VALUE_MAX_CHARS) return value;
+  const sliced = value.slice(0, META_VALUE_MAX_CHARS);
+  const last = sliced.charCodeAt(sliced.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? sliced.slice(0, -1) : sliced;
+}
+
+function extractPageMeta(html: string): PageMeta {
+  const meta: PageMeta = { title: extractPageTitle(html), author: "", date: "", site: "" };
+  const seen = new Set<string>();
+  const record = (name: string, attrs: AttrDict) => {
+    if (name !== "meta") return;
+    const key = (attrs["property"] ?? attrs["name"] ?? "").toLowerCase();
+    const content = collapseWhitespace(attrs["content"] ?? "");
+    if (!key || !content || seen.has(key)) return;
+    seen.add(key);
+    const field = META_KEYS[key];
+    if (field && !meta[field]) meta[field] = capMetaValue(content);
+  };
+  feedHtml(html, {
+    handleStartTag(name: string, attrs: AttrDict) {
+      record(name, attrs);
+    },
+    handleStartEndTag(name: string, attrs: AttrDict) {
+      record(name, attrs);
+    },
+    handleEndTag() {},
+    handleData() {},
+    handleEntityRef() {},
+    handleCharRef() {},
+  });
+  return meta;
+}
+
+function pagePrefixedMarkdown(html: string): string {
+  const meta = extractPageMeta(html);
+  const lines: string[] = [];
+  if (meta.title) lines.push(`Title: ${meta.title}`);
+  if (meta.author) lines.push(`Author: ${meta.author}`);
+  if (meta.date) lines.push(`Date: ${meta.date}`);
+  if (meta.site) lines.push(`Site: ${meta.site}`);
   const markdown = htmlToMarkdown(html, true);
-  const converted = title ? `Title: ${title}\n\n${markdown}` : markdown;
+  const converted = lines.length ? `${lines.join("\n")}\n\n${markdown}` : markdown;
   if (html.endsWith(TRUNCATED_BODY_SUFFIX) && !converted.endsWith(TRUNCATED_BODY_SUFFIX)) {
     return converted + TRUNCATED_BODY_NOTICE;
   }
@@ -827,7 +976,7 @@ function titlePrefixedMarkdown(html: string): string {
 
 function formatReadmeBody(body: string): string {
   if (looksLikeHtmlDocument(body)) {
-    const converted = titlePrefixedMarkdown(body);
+    const converted = pagePrefixedMarkdown(body);
     if (converted.trim()) return converted;
   }
   return body;
@@ -903,5 +1052,5 @@ export async function fetchPageText(
   const isHtml = result.contentType.includes("html") || looksLikeHtml(result.body);
   if (!isHtml) return truncatePageText(result.body.trim(), maxChars);
 
-  return truncatePageText(titlePrefixedMarkdown(result.body), maxChars);
+  return truncatePageText(pagePrefixedMarkdown(result.body), maxChars);
 }

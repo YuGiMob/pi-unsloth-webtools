@@ -309,7 +309,7 @@ describe("wikipedia engine", () => {
 });
 
 describe("sweep deadline", () => {
-  it("bounds the whole sweep by the timeout budget", async () => {
+  it("stops dispatching engines once the sweep budget is exhausted", async () => {
     let calls = 0;
     vi.stubGlobal(
       "fetch",
@@ -325,8 +325,80 @@ describe("sweep deadline", () => {
     const start = performance.now();
     await expect(autoTextSearch("cat", 5, 250)).rejects.toThrow(SearchTimeoutError);
     expect(performance.now() - start).toBeLessThan(1_000);
-    expect(calls).toBe(7);
+    expect(calls).toBe(2);
   }, 10_000);
+});
+
+describe("engine retry", () => {
+  it("retries a transient failure once and keeps the retried results", async () => {
+    let ddgCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("html.duckduckgo.com")) {
+          ddgCalls++;
+          if (ddgCalls === 1) throw new TypeError("fetch failed");
+          const items = Array.from(
+            { length: 5 },
+            (_, i) =>
+              `<div class="result"><div class="body"><h2><a href="https://example.com/${i}">Result ${i}</a></h2><a href="https://example.com/${i}">Snippet ${i}.</a></div></div>`,
+          ).join("");
+          return new Response(items, { status: 200 });
+        }
+        return new Response(null, { status: 200 });
+      }),
+    );
+    const results = await autoTextSearch("cat", 5, 10_000);
+    expect(ddgCalls).toBe(2);
+    expect(results.length).toBe(5);
+  });
+
+  it("retries a null response from an engine", async () => {
+    let ddgCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("html.duckduckgo.com")) {
+          ddgCalls++;
+          if (ddgCalls === 1) return new Response("blocked", { status: 403 });
+          const items = Array.from(
+            { length: 5 },
+            (_, i) =>
+              `<div class="result"><div class="body"><h2><a href="https://example.com/${i}">Result ${i}</a></h2><a href="https://example.com/${i}">Snippet ${i}.</a></div></div>`,
+          ).join("");
+          return new Response(items, { status: 200 });
+        }
+        return new Response(null, { status: 200 });
+      }),
+    );
+    const results = await autoTextSearch("cat", 5, 10_000);
+    expect(ddgCalls).toBe(2);
+    expect(results.length).toBe(5);
+  });
+
+  it("does not retry engine timeouts", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        throw new DOMException("The operation timed out.", "TimeoutError");
+      }),
+    );
+    await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(SearchTimeoutError);
+    expect(calls).toBe(7);
+  });
+
+  it("does not classify a retry that cannot start as a timeout", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await expect(autoTextSearch("cat", 100, 60)).rejects.toThrow(EmptySweepError);
+  }, 5_000);
 });
 
 describe("engine request headers", () => {
