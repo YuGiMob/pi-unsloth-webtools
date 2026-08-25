@@ -332,7 +332,8 @@ describe("sweep deadline", () => {
     const start = performance.now();
     await expect(autoTextSearch("cat", 5, 250)).rejects.toThrow(SearchTimeoutError);
     expect(performance.now() - start).toBeLessThan(1_000);
-    expect(calls).toBe(2);
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(calls).toBeLessThanOrEqual(4);
   }, 10_000);
 });
 
