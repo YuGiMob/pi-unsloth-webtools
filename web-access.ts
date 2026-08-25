@@ -326,7 +326,7 @@ const GITHUB_NON_OWNER_SEGMENTS = new Set([
 
 const GITHUB_NAME_RE = /^[A-Za-z0-9_.\-]{1,100}$/;
 
-export function githubRepoReadmeApiUrl(url: string): string | null {
+function githubRepoOwnerRepo(url: string): [string, string] | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -341,7 +341,17 @@ export function githubRepoReadmeApiUrl(url: string): string | null {
   if (GITHUB_NON_OWNER_SEGMENTS.has(owner.toLowerCase())) return null;
   const cleanRepo = repo.endsWith(".git") ? repo.slice(0, -4) : repo;
   if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(cleanRepo)) return null;
-  return `https://api.github.com/repos/${owner}/${cleanRepo}/readme`;
+  return [owner, cleanRepo];
+}
+
+export function githubRepoReadmeApiUrl(url: string): string | null {
+  const pair = githubRepoOwnerRepo(url);
+  return pair ? `https://api.github.com/repos/${pair[0]}/${pair[1]}/readme` : null;
+}
+
+export function githubRepoRawReadmeUrl(url: string): string | null {
+  const pair = githubRepoOwnerRepo(url);
+  return pair ? `https://raw.githubusercontent.com/${pair[0]}/${pair[1]}/HEAD/README.md` : null;
 }
 
 function ipv4Octets(ip: string): number[] | null {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isTextCandidateContentType } from "../web-fetch.ts";
-import { fetchWith, makePdf, seamWithResponse } from "./helpers.ts";
+import { fakeResolve, fetchWith, makePdf, seamWithResponse } from "./helpers.ts";
 
 function contentTypeMatrix() {
   return [
@@ -55,6 +55,24 @@ describe("pdf handling", () => {
       const out = await fetchWith(Buffer.from("%PDF-1.7\nnot a complete PDF"), contentType);
       expect(out).toBe("(PDF content could not be read as text)");
     }
+  });
+
+  it("mentions the cutoff when a truncated pdf fails to parse", async () => {
+    const body = Buffer.from("%PDF-1.7\nnot a complete PDF");
+    const out = await fetchWith(body, "application/pdf", {
+      seams: {
+        resolve: async () => fakeResolve(),
+        request: async () => ({
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+          body,
+          truncated: true,
+        }),
+      },
+    });
+    expect(out).toBe(
+      "(PDF content could not be read as text; the download was truncated at the download limit)",
+    );
   });
 
   it("reports pdfs without a text layer", async () => {

@@ -48,12 +48,15 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   is pinned for the connection (custom `lookup` + SNI `servername`), so DNS cannot rebind between
   validation and fetch.
 - GitHub repo root pages are rewritten to the unauthenticated README API
-  (`Accept: application/vnd.github.raw+json`), falling back to the HTML page on failure.
-- HTTP 4xx/5xx responses are reported as errors with the status reason instead of
+  (`Accept: application/vnd.github.raw+json`), falling back to the raw README URL
+  (`raw.githubusercontent.com`, no API rate limit) and then to the HTML page on failure.
   returning error-page content.
 - Up to 4 redirect hops, each re-validated and re-resolved against the same rules.
 - 512 KiB download cap (10 MiB for PDFs), overall deadline + per-hop socket timeouts, abort-aware
-  (`signal` cancels mid-flight).
+  (`signal` cancels mid-flight). Fetches cut off by a download cap are marked with a trailing
+  truncation notice, so a partial page is not mistaken for a complete one.
+- Long fetches and searches report a short progress note to the session before they start, so
+  slow tool calls are not silent.
 - PDF text extraction via the official MuPDF.js engine (the same C library pymupdf wraps):
   object streams, all filters, ToUnicode fonts, encryption detection, and a
   pymupdf4llm-style markdown layer (headings, bold/italic, code fences, links, tables)
@@ -95,6 +98,10 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 - Dedup and titles: the aggregator keys on canonicalized hrefs (`utm_*`/tracking parameters
   and fragments stripped, then the URL re-serialized); fetched HTML pages are prefixed with
   the document `<title>`. Studio keys on raw hrefs and returns the converted body alone.
+- Upstream drift: current ddgs ships ten backends (adding bing, startpage, grokipedia),
+  requires a `vqd` token for DuckDuckGo, and exposes an `extract()` mode. This port
+  deliberately pins the Studio snapshot — seven engines, bing disabled upstream, no vqd,
+  no pagination — so engine behavior matches Studio rather than ddgs head.
 
 ## Development
 

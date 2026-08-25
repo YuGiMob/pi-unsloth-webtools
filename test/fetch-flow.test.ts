@@ -78,9 +78,27 @@ describe("github readme rewrite", () => {
     expect(calls.length).toBe(1);
   });
 
-  it("falls back to the html page when the readme api fails", async () => {
+  it("falls back to the raw readme url when the api fails", async () => {
+    const calls: string[] = [];
     const rawFetch: RawFetchSeam = async (url) => {
+      calls.push(url);
       if (url.startsWith("https://api.github.com/")) {
+        return { error: "Failed to fetch URL: HTTP 403 rate limited", body: "", contentType: "" };
+      }
+      return { error: null, body: "# Raw Readme\n\nFresh content from the raw endpoint.", contentType: "text/plain" };
+    };
+    const out = await fetchPageText("https://github.com/unslothai/unsloth", { rawFetch });
+    expect(out).toContain("Fresh content from the raw endpoint.");
+    expect(out).toContain("README of https://github.com/unslothai/unsloth");
+    expect(calls).toEqual([
+      "https://api.github.com/repos/unslothai/unsloth/readme",
+      "https://raw.githubusercontent.com/unslothai/unsloth/HEAD/README.md",
+    ]);
+  });
+
+  it("falls back to the html page when the readme api and raw url fail", async () => {
+    const rawFetch: RawFetchSeam = async (url) => {
+      if (url.startsWith("https://api.github.com/") || url.startsWith("https://raw.githubusercontent.com/")) {
         return { error: "Failed to fetch URL: HTTP 403 rate limited", body: "", contentType: "" };
       }
       return { error: null, body: GITHUB_PAGE, contentType: "text/html" };
@@ -103,6 +121,13 @@ describe("github readme rewrite", () => {
               body: Buffer.from(
                 '{"message":"API rate limit exceeded","documentation_url":"https://docs.github.com/rest"}',
               ),
+            };
+          }
+          if (opts.url.hostname === "raw.githubusercontent.com") {
+            return {
+              status: 404,
+              headers: { "content-type": "text/plain" },
+              body: Buffer.from("404: Not Found"),
             };
           }
           return {
@@ -406,9 +431,10 @@ describe("fetch deadlines and cancellation", () => {
       rawFetch,
     });
     expect(out).toBe("Failed to fetch URL: HTTP 429 rate limited");
-    expect(seenDeadlines.length).toBe(2);
+    expect(seenDeadlines.length).toBe(3);
     expect(seenDeadlines[0]).toBeDefined();
     expect(seenDeadlines[0]).toBe(seenDeadlines[1]);
+    expect(seenDeadlines[1]).toBe(seenDeadlines[2]);
   });
 
   it("aborts a slow body read at the deadline", async () => {
@@ -555,3 +581,69 @@ describe("request headers", () => {
   });
 });
 
+describe("download cap truncation", () => {
+  const CAP_NOTICE = "\n\n... (page truncated at the download limit)";
+  const count = (out: string) => out.split("(page truncated at the download limit)").length - 1;
+
+  it("marks a page cut at the download cap as truncated", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain", "content-length": "600" });
+      res.end("a".repeat(600));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    try {
+      const out = await fetchPageText(`http://example.com:${address.port}/`, {
+        timeoutMs: 5_000,
+        maxBytes: 512,
+        seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
+      });
+      expect(out).toContain("(page truncated at the download limit)");
+      expect(count(out)).toBe(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("does not mark a body that ends exactly at the cap", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain", "content-length": "512" });
+      res.end("b".repeat(512));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    try {
+      const out = await fetchPageText(`http://example.com:${address.port}/`, {
+        timeoutMs: 5_000,
+        maxBytes: 512,
+        seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
+      });
+      expect(out).not.toContain("(page truncated at the download limit)");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("restores the cap notice when main-content scoping drops it", async () => {
+    const body =
+      "<html><head><title>T</title></head><body><article><h1>Doc</h1><p>" +
+      "Readable body text. ".repeat(200) +
+      "</p></article></body></html>" + CAP_NOTICE;
+    const out = await fetchPageText("https://example.com/doc", {
+      rawFetch: async () => ({ error: null, body, contentType: "text/html" }),
+    });
+    expect(count(out)).toBe(1);
+    expect(out.trimEnd().endsWith("... (page truncated at the download limit)")).toBe(true);
+  });
+
+  it("does not duplicate the cap notice on the whole-document path", async () => {
+    const body =
+      "<html><head><title>T</title></head><body><p>Readable body text.</p></body></html>" +
+      CAP_NOTICE;
+    const out = await fetchPageText("https://example.com/doc", {
+      rawFetch: async () => ({ error: null, body, contentType: "text/html" }),
+    });
+    expect(count(out)).toBe(1);
+    expect(out).toContain("Readable body text.");
+  });
+});

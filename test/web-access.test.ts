@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   checkUrlAccess,
+  githubRepoRawReadmeUrl,
   githubRepoReadmeApiUrl,
   isPublicIp,
   normalizeDomain,
@@ -165,12 +166,23 @@ describe("githubRepoReadmeApiUrl", () => {
     expect(githubRepoReadmeApiUrl("https://github.com/unslothai/unsloth.git")).toBe(
       "https://api.github.com/repos/unslothai/unsloth/readme",
     );
+    expect(githubRepoRawReadmeUrl("https://github.com/unslothai/unsloth")).toBe(
+      "https://raw.githubusercontent.com/unslothai/unsloth/HEAD/README.md",
+    );
+    expect(githubRepoRawReadmeUrl("https://github.com/unslothai/unsloth.git")).toBe(
+      "https://raw.githubusercontent.com/unslothai/unsloth/HEAD/README.md",
+    );
   });
 
   it("leaves non-repo pages alone", () => {
-    expect(githubRepoReadmeApiUrl("https://github.com/unslothai/unsloth/blob/main/README.md")).toBeNull();
-    expect(githubRepoReadmeApiUrl("https://github.com/login")).toBeNull();
-    expect(githubRepoReadmeApiUrl("https://example.com/unslothai/unsloth")).toBeNull();
+    for (const url of [
+      "https://github.com/unslothai/unsloth/blob/main/README.md",
+      "https://github.com/login",
+      "https://example.com/unslothai/unsloth",
+    ]) {
+      expect(githubRepoReadmeApiUrl(url)).toBeNull();
+      expect(githubRepoRawReadmeUrl(url)).toBeNull();
+    }
   });
 });
 
@@ -180,6 +192,18 @@ describe("truncatePageText", () => {
     const out = truncatePageText(text, 100);
     expect(out.length).toBeLessThan(200);
     expect(out).toContain("(truncated, 300 chars total)");
+  });
+
+  it("keeps the download-cap notice intact when maxChars truncates", () => {
+    for (const suffix of [
+      "\n\n... (page truncated at the download limit)",
+      "... (page truncated at the download limit)",
+    ]) {
+      const capped = "x".repeat(400) + suffix;
+      const out = truncatePageText(capped, 100);
+      expect(out).toContain("(page truncated at the download limit)");
+      expect(out).toContain(`(truncated, ${capped.length} chars total)`);
+    }
   });
 
   it("returns pages within the budget unchanged", () => {

@@ -46,13 +46,15 @@ export default function (pi: ExtensionAPI) {
       "Use web_search with the url parameter (e.g. {\"url\": \"<URL>\"}) to read the full text of a page found in search results.",
     ],
     parameters: WebSearchParams,
-    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, _ctx) {
       if (params.url?.trim()) {
+        const url = params.url.trim();
+        onUpdate?.({ content: [{ type: "text", text: `Fetching ${url}...` }], details: {} });
         return {
           content: [
             {
               type: "text",
-              text: await fetchPageText(params.url.trim(), {
+              text: await fetchPageText(url, {
                 timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
                 signal: signal ?? undefined,
                 maxChars: positiveMaxChars(params.maxChars),
@@ -62,6 +64,7 @@ export default function (pi: ExtensionAPI) {
           details: {},
         };
       }
+      onUpdate?.({ content: [{ type: "text", text: "Searching the web..." }], details: {} });
       const text = await webSearch(params.query, { signal: signal ?? undefined });
       return { content: [{ type: "text", text }], details: {} };
     },
@@ -79,8 +82,9 @@ export default function (pi: ExtensionAPI) {
       "is capped.",
     promptSnippet: "Fetch a web page and return readable text content",
     parameters: WebFetchParams,
-    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, _ctx) {
       const maxChars = positiveMaxChars(params.maxChars);
+      onUpdate?.({ content: [{ type: "text", text: `Fetching ${params.url}...` }], details: {} });
       const text = await fetchPageText(params.url, {
         timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
         signal: signal ?? undefined,

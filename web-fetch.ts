@@ -4,6 +4,7 @@ import https from "node:https";
 import type { IncomingMessage } from "node:http";
 import {
   checkUrlAccess,
+  githubRepoRawReadmeUrl,
   githubRepoReadmeApiUrl,
   isPublicIp,
   normalizeUrlScheme,
@@ -112,6 +113,8 @@ export class FetchTimeoutError extends Error {
 }
 const FETCH_CANCELLED_MESSAGE = "Failed to fetch URL: cancelled.";
 const FETCH_TIMEOUT_MESSAGE = "Failed to fetch URL: timed out.";
+const TRUNCATED_BODY_NOTICE = "\n\n... (page truncated at the download limit)";
+const TRUNCATED_BODY_SUFFIX = "... (page truncated at the download limit)";
 
 function fetchErrorMessage(err: unknown): string {
   if (err instanceof FetchCancelledError) return FETCH_CANCELLED_MESSAGE;
@@ -139,6 +142,7 @@ export interface HopResponse {
   status: number;
   headers: Record<string, string | string[] | undefined>;
   body: Buffer;
+  truncated?: boolean;
 }
 
 export interface ResolvedHost {
@@ -481,9 +485,13 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
       const chunks: Buffer[] = [];
       let total = 0;
       let head = Buffer.alloc(0);
+      let truncated = false;
       const declaredPdf = String(res.headers["content-type"] ?? "").toLowerCase().includes("pdf");
       let limit = declaredPdf ? opts.maxPdfBytes : opts.maxBytes;
       let extendedForPdf = false;
+      const declaredLengthHeader = res.headers["content-length"];
+      const declaredLength =
+        declaredLengthHeader === undefined ? NaN : Number(declaredLengthHeader);
       const finish = (err: string | null, body: Buffer) => {
         settle(() => {
           if (err) {
@@ -495,6 +503,7 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
               status: res.statusCode ?? 0,
               headers: res.headers as Record<string, string | string[] | undefined>,
               body,
+              truncated,
             });
           }
         });
@@ -519,6 +528,7 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
         }
         const space = limit - total;
         if (space <= 0) {
+          truncated = true;
           res.destroy();
           finish(null, Buffer.concat(chunks));
           return;
@@ -527,6 +537,7 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
         chunks.push(take);
         total += take.length;
         if (total >= limit) {
+          truncated = !(Number.isFinite(declaredLength) && declaredLength === total);
           res.destroy();
           finish(null, Buffer.concat(chunks));
         }
@@ -673,11 +684,18 @@ export async function fetchUrlRaw(
       try {
         pdfText = await extractPdfText(response.body);
       } catch {
-        return { error: "(PDF content could not be read as text)", body: "", contentType };
+        return {
+          error: response.truncated
+            ? "(PDF content could not be read as text; the download was truncated at the download limit)"
+            : "(PDF content could not be read as text)",
+          body: "",
+          contentType,
+        };
       }
       budgetError = fetchBudgetExceeded(deadline, signal, now);
       if (budgetError !== null) return { error: budgetError, body: "", contentType };
       if (!pdfText) pdfText = "(PDF contains no extractable text)";
+      if (response.truncated) pdfText += TRUNCATED_BODY_NOTICE;
       return { error: null, body: pdfText, contentType: "application/pdf" };
     }
 
@@ -700,10 +718,11 @@ export async function fetchUrlRaw(
 
     const declaredCodec = declaredCharset ? normalizeCharset(declaredCharset) : null;
     const bomCodec = bomCodecFor(response.body);
-    const rawHtml = decodeWithCodec(
-      response.body,
-      bomCodec ?? declaredCodec ?? sniffMetaCharsetForHtml(response.body, contentType) ?? "utf-8",
-    );
+    const rawHtml =
+      decodeWithCodec(
+        response.body,
+        bomCodec ?? declaredCodec ?? sniffMetaCharsetForHtml(response.body, contentType) ?? "utf-8",
+      ) + (response.truncated ? TRUNCATED_BODY_NOTICE : "");
 
     if (looksBinary(rawHtml)) {
       let alt: string | null = null;
@@ -715,6 +734,7 @@ export async function fetchUrlRaw(
         if (!looksBinary(candidate)) alt = candidate;
       }
       if (alt !== null) {
+        if (response.truncated) alt += TRUNCATED_BODY_NOTICE;
         return { error: null, body: alt, contentType };
       }
       return {
@@ -741,7 +761,13 @@ function bomCodecFor(bytes: Buffer): string | null {
 export function truncatePageText(text: string, maxChars?: number): string {
   if (!text) return "(page returned no readable text)";
   if (typeof maxChars === "number" && maxChars > 0 && text.length > maxChars) {
-    return text.slice(0, maxChars) + `\n\n... (truncated, ${text.length} chars total)`;
+    const hadCapNotice = text.endsWith(TRUNCATED_BODY_SUFFIX);
+    const core = (hadCapNotice ? text.slice(0, -TRUNCATED_BODY_SUFFIX.length) : text).trimEnd();
+    return (
+      core.slice(0, maxChars) +
+      `\n\n... (truncated, ${text.length} chars total)` +
+      (hadCapNotice ? TRUNCATED_BODY_NOTICE : "")
+    );
   }
   return text;
 }
@@ -794,7 +820,19 @@ function extractPageTitle(html: string): string {
 function titlePrefixedMarkdown(html: string): string {
   const title = extractPageTitle(html);
   const markdown = htmlToMarkdown(html, true);
-  return title ? `Title: ${title}\n\n${markdown}` : markdown;
+  const converted = title ? `Title: ${title}\n\n${markdown}` : markdown;
+  if (html.endsWith(TRUNCATED_BODY_SUFFIX) && !converted.endsWith(TRUNCATED_BODY_SUFFIX)) {
+    return converted + TRUNCATED_BODY_NOTICE;
+  }
+  return converted;
+}
+
+function formatReadmeBody(body: string): string {
+  if (looksLikeHtmlDocument(body)) {
+    const converted = titlePrefixedMarkdown(body);
+    if (converted.trim()) return converted;
+  }
+  return body;
 }
 
 export async function fetchPageText(
@@ -827,15 +865,27 @@ export async function fetchPageText(
         "X-GitHub-Api-Version": "2022-11-28",
       },
     });
-    if (readmeResult.error === null && readmeResult.body.trim()) {
-      let readmeBody = readmeResult.body;
-      if (looksLikeHtmlDocument(readmeBody)) {
-        const converted = titlePrefixedMarkdown(readmeBody);
-        if (converted.trim()) readmeBody = converted;
-      }
-      if (readmeBody.trim()) {
+    const apiBody = readmeResult.error === null ? formatReadmeBody(readmeResult.body) : "";
+    if (apiBody.trim()) {
+      return truncatePageText(
+        `README of ${url} (fetched via the GitHub README API):\n\n` + apiBody,
+        maxChars,
+      );
+    }
+    const rawReadmeUrl = githubRepoRawReadmeUrl(url);
+    if (rawReadmeUrl) {
+      const rawResult = await rawFetch(rawReadmeUrl, {
+        deadlineMs,
+        signal,
+        websitePolicy: policy,
+        maxBytes: options.maxBytes,
+        maxPdfBytes: options.maxPdfBytes,
+        seams: options.seams,
+      });
+      const rawBody = rawResult.error === null ? formatReadmeBody(rawResult.body) : "";
+      if (rawBody.trim()) {
         return truncatePageText(
-          `README of ${url} (fetched via the GitHub README API):\n\n` + readmeBody,
+          `README of ${url} (fetched via the GitHub raw README URL):\n\n` + rawBody,
           maxChars,
         );
       }
