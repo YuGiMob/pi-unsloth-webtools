@@ -92,7 +92,6 @@ interface LinkInfo {
 interface TableBand {
   markdown: string;
   firstLineIndex: number;
-  lineIndexes: Set<number>;
 }
 
 interface HeaderInfo {
@@ -317,8 +316,7 @@ function detectTableBands(lines: MergedLine[]): TableBand[] {
           for (const row of rows.slice(1)) {
             output += "|" + row.join("|") + "|\n";
           }
-          const indexes = new Set(band.map((l) => lines.indexOf(l)));
-          bands.push({ markdown: output + "\n", firstLineIndex: Math.min(...indexes), lineIndexes: indexes });
+          bands.push({ markdown: output + "\n", firstLineIndex: Math.min(...band.map((l) => lines.indexOf(l))) });
         }
       }
     }
@@ -435,10 +433,6 @@ function writeText(
       out += part;
     }
     out += "\n";
-  }
-  while (emittedBands < tableBands.length) {
-    out += "\n" + tableBands[emittedBands].markdown;
-    emittedBands++;
   }
   out += "\n";
   if (code) out += "```\n";

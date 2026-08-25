@@ -124,6 +124,26 @@ describe("isPublicIp", () => {
     expect(isPublicIp("2001::1")).toBe(false);
   });
 
+  it("blocks ipv4-compatible and long-form mapped forms", () => {
+    expect(isPublicIp("::7f00:1")).toBe(false);
+    expect(isPublicIp("::c0a8:101")).toBe(false);
+    expect(isPublicIp("::a00:1")).toBe(false);
+    expect(isPublicIp("0:0:0:0:0:ffff:7f00:1")).toBe(false);
+    expect(isPublicIp("0:0:0:0:0:0:0:1")).toBe(false);
+  });
+
+  it("blocks all ipv4-mapped forms, even for public addresses", () => {
+    expect(isPublicIp("::ffff:8.8.8.8")).toBe(false);
+    expect(isPublicIp("0:0:0:0:0:ffff:1.1.1.1")).toBe(false);
+    expect(isPublicIp("::ffff:808:808")).toBe(false);
+  });
+
+  it("blocks zero-padded spellings that evade run detection", () => {
+    expect(isPublicIp("0000:0000:0000:0000:0000:0000:0000:0001")).toBe(false);
+    expect(isPublicIp("0000:0000:0000:0000:0000:ffff:7f00:1")).toBe(false);
+    expect(isPublicIp("0000:0000:0000:0000:0000:0000:0000:0000")).toBe(false);
+  });
+
   it("accepts public addresses", () => {
     expect(isPublicIp("8.8.8.8")).toBe(true);
     expect(isPublicIp("1.1.1.1")).toBe(true);

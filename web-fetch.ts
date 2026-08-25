@@ -125,6 +125,15 @@ function fetchErrorMessage(err: unknown): string {
   return `Failed to fetch URL: ${message}`;
 }
 
+function statusErrorResult(status: number): RawFetchResult {
+  const reason = http.STATUS_CODES[status] ?? "";
+  return {
+    error: `Failed to fetch URL: HTTP ${status}${reason ? ` ${reason}` : ""}`,
+    body: "",
+    contentType: "",
+  };
+}
+
 export interface FetchPageOptions {
   timeoutMs?: number;
   deadlineMs?: number;
@@ -188,20 +197,26 @@ export interface RawFetchResult {
   contentType: string;
 }
 
-export function looksLikeHtml(body: string): boolean {
+function htmlProbe(body: string, re: RegExp): boolean {
   const probe = body.replace(/^[ \t\n\r\f\v]+/, "").slice(0, 256).toLowerCase();
-  return HTML_LEADING_RE.test(probe);
+  return re.test(probe);
+}
+
+export function looksLikeHtml(body: string): boolean {
+  return htmlProbe(body, HTML_LEADING_RE);
 }
 
 export function looksLikeHtmlDocument(body: string): boolean {
-  const probe = body.replace(/^[ \t\n\r\f\v]+/, "").slice(0, 256).toLowerCase();
-  return HTML_DOCUMENT_RE.test(probe);
+  return htmlProbe(body, HTML_DOCUMENT_RE);
+}
+
+function parseContentType(value: string | null | undefined): string {
+  return /^[\w.+-]+\/[\w.+-]+/.exec(value ?? "")?.[0] ?? "";
 }
 
 export function isTextCandidateContentType(contentType: string | null): boolean {
-  const match = /^[\w.+-]+\/[\w.+-]+/.exec(contentType ?? "");
-  if (!match) return true;
-  const ct = match[0].toLowerCase();
+  const ct = parseContentType(contentType).toLowerCase();
+  if (!ct) return true;
   if (ct.startsWith("text/")) return true;
   if (ct.startsWith("application/")) {
     const subtype = ct.slice("application/".length);
@@ -448,13 +463,14 @@ async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promi
 }
 
 
-function fetchBudgetExceeded(
+function budgetExceededResult(
   deadline: number | null,
   signal: AbortSignal | undefined,
   now: () => number = Date.now,
-): string | null {
-  if (signal?.aborted) return FETCH_CANCELLED_MESSAGE;
-  if (deadline !== null && now() >= deadline) return FETCH_TIMEOUT_MESSAGE;
+  contentType = "",
+): RawFetchResult | null {
+  if (signal?.aborted) return { error: FETCH_CANCELLED_MESSAGE, body: "", contentType };
+  if (deadline !== null && now() >= deadline) return { error: FETCH_TIMEOUT_MESSAGE, body: "", contentType };
   return null;
 }
 
@@ -527,12 +543,6 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
           }
         }
         const space = limit - total;
-        if (space <= 0) {
-          truncated = true;
-          res.destroy();
-          finish(null, Buffer.concat(chunks));
-          return;
-        }
         const take = chunk.subarray(0, Math.min(chunk.length, space));
         chunks.push(take);
         total += take.length;
@@ -574,8 +584,8 @@ export async function fetchUrlRaw(
   const [allowed, reason, hostname] = checkUrlAccess(url, policy);
   if (!allowed) return { error: reason, body: "", contentType: "" };
 
-  let budgetError = fetchBudgetExceeded(deadline, signal, now);
-  if (budgetError !== null) return { error: budgetError, body: "", contentType: "" };
+  const budgetResult = budgetExceededResult(deadline, signal, now);
+  if (budgetResult !== null) return budgetResult;
   let resolved = await resolveHost(hostname, signal);
   if (!resolved.ok) return { error: resolved.reason, body: "", contentType: "" };
 
@@ -585,8 +595,8 @@ export async function fetchUrlRaw(
   const userAgent = randomUserAgent();
 
   for (let hop = 0; hop < MAX_REQUESTS; hop++) {
-    budgetError = fetchBudgetExceeded(deadline, signal, now);
-    if (budgetError !== null) return { error: budgetError, body: "", contentType: "" };
+    const budgetResult = budgetExceededResult(deadline, signal, now);
+    if (budgetResult !== null) return budgetResult;
     const parsed = new URL(currentUrl);
     const hostHeader = parsed.hostname + (parsed.port ? `:${parsed.port}` : "");
     const headers: Record<string, string> = {
@@ -617,12 +627,7 @@ export async function fetchUrlRaw(
 
     if (response.status >= 300 && response.status < 400) {
       if (![301, 302, 303, 307, 308].includes(response.status)) {
-        const reason = http.STATUS_CODES[response.status] ?? "";
-        return {
-          error: `Failed to fetch URL: HTTP ${response.status}${reason ? ` ${reason}` : ""}`,
-          body: "",
-          contentType: "",
-        };
+        return statusErrorResult(response.status);
       }
       const rawLocation = response.headers.location;
       const location = Array.isArray(rawLocation) ? rawLocation[0] : rawLocation;
@@ -650,22 +655,15 @@ export async function fetchUrlRaw(
       continue;
     }
 
-    budgetError = fetchBudgetExceeded(deadline, signal, now);
-    if (budgetError !== null) return { error: budgetError, body: "", contentType: "" };
+    const postBudgetResult = budgetExceededResult(deadline, signal, now);
+    if (postBudgetResult !== null) return postBudgetResult;
 
     if (response.status >= 400) {
-      const reason = http.STATUS_CODES[response.status] ?? "";
-      return {
-        error: `Failed to fetch URL: HTTP ${response.status}${reason ? ` ${reason}` : ""}`,
-        body: "",
-        contentType: "",
-      };
+      return statusErrorResult(response.status);
     }
 
     const contentTypeHeader = response.headers["content-type"];
-    const contentType = contentTypeHeader
-      ? (/^[\w.+-]+\/[\w.+-]+/.exec(String(contentTypeHeader).toLowerCase()) ?? [""])[0]
-      : "";
+    const contentType = parseContentType(contentTypeHeader ? String(contentTypeHeader).toLowerCase() : null);
     const declaredCharset = contentTypeHeader
       ? (/charset=([^;\s]+)/i.exec(String(contentTypeHeader))?.[1] ?? null)
       : null;
@@ -692,15 +690,15 @@ export async function fetchUrlRaw(
           contentType,
         };
       }
-      budgetError = fetchBudgetExceeded(deadline, signal, now);
-      if (budgetError !== null) return { error: budgetError, body: "", contentType };
+      const budgetResult = budgetExceededResult(deadline, signal, now, contentType);
+      if (budgetResult !== null) return budgetResult;
       if (!pdfText) pdfText = "(PDF contains no extractable text)";
       if (response.truncated) pdfText += TRUNCATED_BODY_NOTICE;
       return { error: null, body: pdfText, contentType: "application/pdf" };
     }
 
     if (!isTextCandidateContentType(contentType)) {
-      const safeType = /^[\w.+-]+\/[\w.+-]+/.exec(contentType ?? "")?.[0] ?? "unknown type";
+      const safeType = parseContentType(contentType) || "unknown type";
       return {
         error: `(non-text content: ${safeType}, ${response.body.length} bytes; not readable as text)`,
         body: "",

@@ -529,6 +529,12 @@ async function readBodyCapped(response: Response): Promise<string | null> {
   return new TextDecoder("utf-8").decode(Buffer.concat(chunks));
 }
 
+function mapFetchError(err: unknown): never {
+  if (err instanceof DOMException && err.name === "TimeoutError") throw new SearchTimeoutError();
+  if (err instanceof DOMException && err.name === "AbortError") throw new SearchCancelled();
+  throw err;
+}
+
 async function httpFetch(
   url: string,
   options: {
@@ -563,9 +569,7 @@ async function httpFetch(
       signal: AbortSignal.any(signals),
     });
   } catch (err) {
-    if (err instanceof DOMException && err.name === "TimeoutError") throw new SearchTimeoutError();
-    if (err instanceof DOMException && err.name === "AbortError") throw new SearchCancelled();
-    throw err;
+    throw mapFetchError(err);
   }
   if (response.status !== 200) {
     try {
@@ -578,9 +582,7 @@ async function httpFetch(
   try {
     return await readBodyCapped(response);
   } catch (err) {
-    if (err instanceof DOMException && err.name === "TimeoutError") throw new SearchTimeoutError();
-    if (err instanceof DOMException && err.name === "AbortError") throw new SearchCancelled();
-    throw err;
+    throw mapFetchError(err);
   }
 }
 

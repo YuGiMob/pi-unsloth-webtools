@@ -77,11 +77,12 @@ function compressIpv6(ip: string): string {
 }
 
 function compressGroups(groups: string[]): string {
+  const normalized = groups.map((g) => (/^0+$/.test(g) ? "0" : g.replace(/^0+(?=[0-9a-f])/, "")));
   let bestStart = -1;
   let bestLen = 0;
   let runStart = -1;
-  for (let i = 0; i <= groups.length; i++) {
-    if (i < groups.length && groups[i] === "0") {
+  for (let i = 0; i <= normalized.length; i++) {
+    if (i < normalized.length && normalized[i] === "0") {
       if (runStart === -1) runStart = i;
     } else if (runStart !== -1) {
       const runLen = i - runStart;
@@ -92,10 +93,10 @@ function compressGroups(groups: string[]): string {
       runStart = -1;
     }
   }
-  if (bestLen < 2) return groups.map((g) => g.replace(/^0+(?=[0-9a-f])/, "")).join(":");
-  const head = groups.slice(0, bestStart).map((g) => g.replace(/^0+(?=[0-9a-f])/, ""));
-  const tail = groups.slice(bestStart + bestLen).map((g) => g.replace(/^0+(?=[0-9a-f])/, ""));
-  return [...head, "", ...tail].join(":");
+  if (bestLen < 2) return normalized.join(":");
+  const head = normalized.slice(0, bestStart);
+  const tail = normalized.slice(bestStart + bestLen);
+  return `${head.join(":")}::${tail.join(":")}`;
 }
 
 const PCP_ANYCAST = new Set(["2001:1::1", "2001:1::2"]);
@@ -382,20 +383,22 @@ export function isPublicIp(ip: string): boolean {
     if (o[0] >= 224) return false;
     return true;
   }
-  const lower = ip.toLowerCase();
-  if (lower === "::" || lower === "::1") return false;
-  if (lower.startsWith("fc") || lower.startsWith("fd")) return false;
-  if (/^fe[89ab][0-9a-f]:/.test(lower)) return false;
-  if (lower.startsWith("ff")) return false;
-  if (lower.startsWith("2001:db8")) return false;
-  if (lower.startsWith("64:ff9b:")) return false;
-  if (lower.startsWith("2001:10:")) return false;
-  if (lower.startsWith("2002:")) return false;
-  if (lower.startsWith("2001:0:") || lower.startsWith("2001::")) return false;
-  if (lower.startsWith("2001:2:")) return false;
-  if (isPcpAnycast(lower)) return false;
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
-  if (mapped) return isPublicIp(mapped[1]);
-  if (lower.startsWith("::ffff:")) return false;
+  let canonical: string;
+  try {
+    canonical = compressIpv6(ip);
+  } catch {
+    return false;
+  }
+  if (canonical === "::1" || canonical.startsWith("::")) return false;
+  if (canonical.startsWith("fc") || canonical.startsWith("fd")) return false;
+  if (/^fe[89ab][0-9a-f]:/.test(canonical)) return false;
+  if (canonical.startsWith("ff")) return false;
+  if (canonical.startsWith("2001:db8")) return false;
+  if (canonical.startsWith("64:ff9b:")) return false;
+  if (canonical.startsWith("2001:10:")) return false;
+  if (canonical.startsWith("2002:")) return false;
+  if (canonical.startsWith("2001:0:") || canonical.startsWith("2001::")) return false;
+  if (canonical.startsWith("2001:2:")) return false;
+  if (isPcpAnycast(canonical)) return false;
   return true;
 }
