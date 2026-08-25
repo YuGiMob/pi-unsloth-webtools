@@ -249,6 +249,26 @@ describe("html_to_markdown formatting", () => {
   });
 });
 
+describe("self-closing tags", () => {
+  it("renders self-closing br and hr like their open forms", () => {
+    const out = htmlToMarkdown("<body><p>one<br/>two<br />three</p><hr/><p>after</p></body>");
+    expect(out).toContain("one\ntwo");
+    expect(out).toContain("two\nthree");
+    expect(out).toContain("---");
+    expect(out).toContain("after");
+  });
+
+  it("suppresses hidden self-closing br", () => {
+    const out = htmlToMarkdown("<body><p>one<br hidden/>two</p></body>");
+    expect(out).not.toContain("one\ntwo");
+    expect(out).toContain("onetwo");
+  });
+
+  it("keeps self-closing non-void tags inert", () => {
+    expect(htmlToMarkdown("<body><div/><p>kept</p></body>")).toContain("kept");
+  });
+});
+
 describe("raw-text scanning", () => {
   it("does not parse `<` inside inline scripts as markup", () => {
     const html =

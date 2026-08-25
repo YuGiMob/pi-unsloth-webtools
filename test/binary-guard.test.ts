@@ -175,6 +175,7 @@ describe("binary sniffing", () => {
       for (const [bom, encoded] of cases) {
         const out = await fetchWith(Buffer.concat([bom, encoded]), contentType);
         expect(out).toContain("readable");
+        expect(out).not.toContain("\ufeff");
         expect(out).not.toContain("binary content");
       }
     }

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { decodeHtmlEntities, feedHtml } from "./html-to-md.ts";
+import { collapseWhitespace, decodeHtmlEntities, feedHtml } from "./html-to-md.ts";
 import type { AttrDict } from "./html-to-md.ts";
 import { randomUserAgent } from "./user-agents.ts";
 export class EmptySweepError extends Error {
@@ -35,7 +35,7 @@ export function normalizeText(raw: string): string {
   text = decodeHtmlEntities(text);
   text = text.normalize("NFC");
   text = text.replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Cn}]/gu, "");
-  return text.trim().split(/\s+/).join(" ");
+  return collapseWhitespace(text);
 }
 
 export function normalizeUrl(url: string): string {
@@ -417,7 +417,7 @@ export function extractResults(
       ["body", elementsXpath.body],
     ] as const;
     for (const [key, value] of entries) {
-      const data = xpathText(value, item).join("").trim().split(/\s+/).join(" ");
+      const data = collapseWhitespace(xpathText(value, item).join(""));
       if (!data) continue;
       result[key] = key === "href" ? normalizeUrl(data) : normalizeText(data);
     }
@@ -567,7 +567,14 @@ async function httpFetch(
     if (err instanceof DOMException && err.name === "AbortError") throw new SearchCancelled();
     throw err;
   }
-  if (response.status !== 200) return null;
+  if (response.status !== 200) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      return null;
+    }
+    return null;
+  }
   try {
     return await readBodyCapped(response);
   } catch (err) {

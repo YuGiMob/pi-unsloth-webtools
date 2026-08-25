@@ -9,7 +9,7 @@ import {
   normalizeUrlScheme,
   type WebsitePolicy,
 } from "./web-access.ts";
-import { decodeHtmlEntities, feedHtml, htmlToMarkdown } from "./html-to-md.ts";
+import { collapseWhitespace, decodeHtmlEntities, feedHtml, htmlToMarkdown } from "./html-to-md.ts";
 import { INVALID_CHARREFS } from "./entities.ts";
 import { extractPdfText, PdfParseError } from "./pdf.ts";
 import { randomUserAgent } from "./user-agents.ts";
@@ -17,6 +17,7 @@ import { randomUserAgent } from "./user-agents.ts";
 const MAX_FETCH_BYTES = 512 * 1024;
 const MAX_PDF_FETCH_BYTES = 10 * 1024 * 1024;
 const MAX_REQUESTS = 5;
+export const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
 
 const UTF32_LE_BOM = Buffer.from([0xff, 0xfe, 0x00, 0x00]);
 const UTF32_BE_BOM = Buffer.from([0x00, 0x00, 0xfe, 0xff]);
@@ -108,6 +109,17 @@ export class FetchTimeoutError extends Error {
   constructor() {
     super("timed out");
   }
+}
+const FETCH_CANCELLED_MESSAGE = "Failed to fetch URL: cancelled.";
+const FETCH_TIMEOUT_MESSAGE = "Failed to fetch URL: timed out.";
+
+function fetchErrorMessage(err: unknown): string {
+  if (err instanceof FetchCancelledError) return FETCH_CANCELLED_MESSAGE;
+  if (err instanceof FetchTimeoutError) return FETCH_TIMEOUT_MESSAGE;
+  const message = err instanceof Error ? err.message : String(err);
+  if (message === "cancelled") return FETCH_CANCELLED_MESSAGE;
+  if (message === "timed out") return FETCH_TIMEOUT_MESSAGE;
+  return `Failed to fetch URL: ${message}`;
 }
 
 export interface FetchPageOptions {
@@ -321,7 +333,12 @@ function sniffMetaCharsetForHtml(bytes: Buffer, contentType: string): string | n
 
 function decodeUtf32(bytes: Buffer, littleEndian: boolean): string {
   let out = "";
-  for (let i = 0; i + 3 < bytes.length; i += 4) {
+  let i = 0;
+  if (bytes.length >= 4) {
+    const first = littleEndian ? bytes.readUInt32LE(0) : bytes.readUInt32BE(0);
+    if (first === 0xfeff) i = 4;
+  }
+  for (; i + 3 < bytes.length; i += 4) {
     const v = littleEndian ? bytes.readUInt32LE(i) : bytes.readUInt32BE(i);
     if (v === 0 || v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff)) {
       out += "\ufffd";
@@ -334,7 +351,8 @@ function decodeUtf32(bytes: Buffer, littleEndian: boolean): string {
 
 function decodeUtf16Be(bytes: Buffer): string {
   let out = "";
-  for (let i = 0; i + 1 < bytes.length; i += 2) {
+  let i = bytes.length >= 2 && bytes.readUInt16BE(0) === 0xfeff ? 2 : 0;
+  for (; i + 1 < bytes.length; i += 2) {
     out += String.fromCharCode(bytes.readUInt16BE(i));
   }
   return out;
@@ -431,8 +449,8 @@ function fetchBudgetExceeded(
   signal: AbortSignal | undefined,
   now: () => number = Date.now,
 ): string | null {
-  if (signal?.aborted) return "Failed to fetch URL: cancelled.";
-  if (deadline !== null && now() >= deadline) return "Failed to fetch URL: timed out.";
+  if (signal?.aborted) return FETCH_CANCELLED_MESSAGE;
+  if (deadline !== null && now() >= deadline) return FETCH_TIMEOUT_MESSAGE;
   return null;
 }
 
@@ -583,16 +601,7 @@ export async function fetchUrlRaw(
         signal,
       });
     } catch (err) {
-      if (err instanceof FetchCancelledError)
-        return { error: "Failed to fetch URL: cancelled.", body: "", contentType: "" };
-      if (err instanceof FetchTimeoutError)
-        return { error: "Failed to fetch URL: timed out.", body: "", contentType: "" };
-      const message = err instanceof Error ? err.message : String(err);
-      if (message === "cancelled")
-        return { error: "Failed to fetch URL: cancelled.", body: "", contentType: "" };
-      if (message === "timed out")
-        return { error: "Failed to fetch URL: timed out.", body: "", contentType: "" };
-      return { error: `Failed to fetch URL: ${message}`, body: "", contentType: "" };
+      return { error: fetchErrorMessage(err), body: "", contentType: "" };
     }
 
     if (response.status >= 300 && response.status < 400) {
@@ -779,7 +788,7 @@ function extractPageTitle(html: string): string {
       if (inTitle) parts.push(decodeHtmlEntities(`&#${name};`));
     },
   });
-  return parts.join("").replace(/\s+/g, " ").trim();
+  return collapseWhitespace(parts.join(""));
 }
 
 function titlePrefixedMarkdown(html: string): string {
@@ -792,7 +801,7 @@ export async function fetchPageText(
   url: string,
   options: FetchPageOptions = {},
 ): Promise<string> {
-  const timeoutMs = options.timeoutMs ?? 60_000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
   const now = options.nowMs ?? Date.now;
   const deadlineMs = options.deadlineMs ?? now() + timeoutMs;
   const signal = options.signal;

@@ -1,9 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { webSearch } from "./web-search.ts";
-import { fetchPageText } from "./web-fetch.ts";
-
-const FETCH_TIMEOUT_MS = 60_000;
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchPageText } from "./web-fetch.ts";
 
 function positiveMaxChars(value: unknown): number | undefined {
   return typeof value === "number" && value > 0 ? value : undefined;
@@ -55,7 +53,7 @@ export default function (pi: ExtensionAPI) {
             {
               type: "text",
               text: await fetchPageText(params.url.trim(), {
-                timeoutMs: FETCH_TIMEOUT_MS,
+                timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
                 signal: signal ?? undefined,
                 maxChars: positiveMaxChars(params.maxChars),
               }),
@@ -84,7 +82,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
       const maxChars = positiveMaxChars(params.maxChars);
       const text = await fetchPageText(params.url, {
-        timeoutMs: FETCH_TIMEOUT_MS,
+        timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
         signal: signal ?? undefined,
         maxChars,
       });

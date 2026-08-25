@@ -214,6 +214,10 @@ export function decodeHtmlEntities(text: string): string {
   });
 }
 
+export function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 
 interface HtmlHandlers {
   handleStartTag(name: string, attrs: AttrDict): void;
@@ -384,6 +388,10 @@ export function feedHtml(input: string, handlers: HtmlHandlers): void {
   emitText(input.slice(textStart));
 }
 
+function popMarksAbove(marks: number[], index: number): void {
+  while (marks.length && marks[marks.length - 1] >= index) marks.pop();
+}
+
 class MarkdownRenderer {
   out: string[] = [];
   private skipDepth = 0;
@@ -524,8 +532,8 @@ class MarkdownRenderer {
   }
 
   private finishLink(): void {
-    const text = this.linkTextParts.join("").replace(/\s+/g, " ").trim();
-    const headingText = this.linkHeadingParts.join("").replace(/\s+/g, " ").trim();
+    const text = collapseWhitespace(this.linkTextParts.join(""));
+    const headingText = collapseWhitespace(this.linkHeadingParts.join(""));
     const href = this.linkHref ?? "";
     this.inLink = false;
     this.linkTextParts = [];
@@ -571,12 +579,8 @@ class MarkdownRenderer {
       }
       if (closeAt === null) break;
       this.truncateOpenTags(closeAt);
-      while (this.hiddenMarks.length && this.hiddenMarks[this.hiddenMarks.length - 1] >= closeAt) {
-        this.hiddenMarks.pop();
-      }
-      while (this.headingMarks.length && this.headingMarks[this.headingMarks.length - 1] >= closeAt) {
-        this.headingMarks.pop();
-      }
+      popMarksAbove(this.hiddenMarks, closeAt);
+      popMarksAbove(this.headingMarks, closeAt);
       this.closeHeaderFrames(closeAt);
     }
   }
@@ -692,12 +696,8 @@ class MarkdownRenderer {
       for (let i = this.openTags.length - 1; i >= 0; i--) {
         if (this.openTags[i] === tag) {
           this.truncateOpenTags(i);
-          while (this.hiddenMarks.length && this.hiddenMarks[this.hiddenMarks.length - 1] >= i) {
-            this.hiddenMarks.pop();
-          }
-          while (this.headingMarks.length && this.headingMarks[this.headingMarks.length - 1] >= i) {
-            this.headingMarks.pop();
-          }
+          popMarksAbove(this.hiddenMarks, i);
+          popMarksAbove(this.headingMarks, i);
           this.closeHeaderFrames(i, tag === "header");
           break;
         }
@@ -715,7 +715,11 @@ class MarkdownRenderer {
     return !suppressed;
   }
 
-  handleStartEndTag(_name: string, _attrs: AttrDict): void {}
+  handleStartEndTag(name: string, attrs: AttrDict): void {
+    if (!VOID_TAGS.has(name)) return;
+    this.handleStartTag(name, attrs);
+    this.handleEndTag(name);
+  }
   handleStartTag(tag: string, attrs: AttrDict): void {
     if (this.skipDepth) {
       if (SKIP_TAGS.has(tag)) this.skipDepth++;

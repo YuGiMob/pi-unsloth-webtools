@@ -1,4 +1,5 @@
 import { checkUrlAccess, scopeSearchQuery, type WebsitePolicy } from "./web-access.ts";
+import { collapseWhitespace } from "./html-to-md.ts";
 import {
   autoTextSearch,
   EmptySweepError,
@@ -46,7 +47,7 @@ export async function webSearch(
   query: string | undefined,
   options: WebSearchOptions = {},
 ): Promise<string> {
-  const maxResults = options.maxResults ?? 5;
+  const maxResults = options.maxResults ?? MAX_RESULTS;
   const timeoutMs = options.timeoutMs ?? SEARCH_TIMEOUT_MS;
   const signal = options.signal;
   const policy = options.websitePolicy ?? null;
@@ -92,9 +93,9 @@ export function searchFailureMessage(exc: unknown, timeoutMs = SEARCH_TIMEOUT_MS
 
 export function formatSearchResults(results: SearchResult[]): string {
   const parts = results.map((result) => {
-    const title = String(result.title ?? "").replace(/\s+/g, " ");
-    const href = String(result.href ?? "").replace(/\s+/g, " ").trim();
-    const snippet = String(result.body ?? "").replace(/\s+/g, " ");
+    const title = collapseWhitespace(String(result.title ?? ""));
+    const href = collapseWhitespace(String(result.href ?? ""));
+    const snippet = collapseWhitespace(String(result.body ?? ""));
     return `Title: ${title}\nURL: ${href}\nSnippet: ${snippet}`;
   });
   const text = parts.join("\n\n---\n\n");

@@ -129,15 +129,7 @@ export function normalizeWebsitePolicy(value: unknown): WebsitePolicy {
     if (rawDomains.length > MAX_DOMAINS_PER_LIST) {
       throw new Error(`${key} supports at most ${MAX_DOMAINS_PER_LIST} domains`);
     }
-    const domains: string[] = [];
-    for (const rawDomain of rawDomains) {
-      if (typeof rawDomain !== "string" || rawDomain.length > MAX_CACHEABLE_DOMAIN_LEN) {
-        throw new Error(`${key} must contain only strings`);
-      }
-      const domain = normalizeDomain(rawDomain);
-      if (!domains.includes(domain)) domains.push(domain);
-    }
-    normalized[key] = domains;
+    normalized[key] = normalizeDomainList(rawDomains, key);
   }
   return normalized;
 }
@@ -146,12 +138,31 @@ function matchesDomain(hostname: string, domain: string): boolean {
   return hostname === domain || hostname.endsWith(`.${domain}`);
 }
 
-export function hostnameAllowed(hostname: string, policy: WebsitePolicy | null): boolean {
-  let host: string;
+function normalizeDomainList(domains: unknown[], listName: string): string[] {
+  const out: string[] = [];
+  for (const rawDomain of domains) {
+    if (typeof rawDomain !== "string" || rawDomain.length > MAX_CACHEABLE_DOMAIN_LEN) {
+      throw new Error(`${listName} must contain only strings`);
+    }
+    const domain = normalizeDomain(rawDomain);
+    if (!out.includes(domain)) out.push(domain);
+  }
+  return out;
+}
+
+function normalizePolicy(policy: WebsitePolicy | null | undefined): WebsitePolicy {
+  if (!policy) return { allowedDomains: [], blockedDomains: [] };
+  const normalized: WebsitePolicy = { allowedDomains: [], blockedDomains: [] };
+  for (const key of ["allowedDomains", "blockedDomains"] as const) {
+    normalized[key] = normalizeDomainList(policy[key], key);
+  }
+  return normalized;
+}
+
+function policyAllows(host: string, policy: WebsitePolicy | null): boolean {
   let normalized: WebsitePolicy;
   try {
-    host = normalizeDomain(hostname);
-    normalized = normalizePolicyMaybe(policy);
+    normalized = normalizePolicy(policy);
   } catch {
     return false;
   }
@@ -160,22 +171,12 @@ export function hostnameAllowed(hostname: string, policy: WebsitePolicy | null):
   return allowed.length === 0 || allowed.some((domain) => matchesDomain(host, domain));
 }
 
-function normalizePolicyObject(policy: WebsitePolicy): WebsitePolicy {
-  const normalized: WebsitePolicy = { allowedDomains: [], blockedDomains: [] };
-  for (const key of ["allowedDomains", "blockedDomains"] as const) {
-    const domains: string[] = [];
-    for (const rawDomain of policy[key]) {
-      const domain = normalizeDomain(rawDomain);
-      if (!domains.includes(domain)) domains.push(domain);
-    }
-    normalized[key] = domains;
+export function hostnameAllowed(hostname: string, policy: WebsitePolicy | null): boolean {
+  try {
+    return policyAllows(normalizeDomain(hostname), policy);
+  } catch {
+    return false;
   }
-  return normalized;
-}
-
-function normalizePolicyMaybe(policy: WebsitePolicy | null | undefined): WebsitePolicy {
-  if (!policy) return { allowedDomains: [], blockedDomains: [] };
-  return normalizePolicyObject(policy);
 }
 
 export function checkUrlAccess(
@@ -221,7 +222,7 @@ export function checkUrlAccess(
   } catch {
     return [false, "Blocked: the URL has an invalid hostname or port.", ""];
   }
-  if (!hostnameAllowed(hostname, policy)) {
+  if (!policyAllows(hostname, policy)) {
     return [false, `Blocked: the website access policy disallows ${hostname}.`, hostname];
   }
   return [true, "", hostname];
