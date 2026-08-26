@@ -863,6 +863,7 @@ export async function autoTextSearch(
   const seenProviders = new Set<string>();
   const aggregator = new ResultsAggregator();
   const ctx: EngineContext = { region: "us-en", safesearch: "moderate" };
+  const controller = new AbortController();
   let timedOut = false;
   let cancelled = false;
   const uniqueProviders = new Set(engines.map((e) => e.provider)).size;
@@ -872,14 +873,19 @@ export async function autoTextSearch(
   const run = async (engine: Engine) => {
     let results: SearchResult[] | null = null;
     for (let attempt = 0; attempt < 2 && results === null; attempt++) {
+      if (controller.signal.aborted) return;
       const budgetLeft = deadline - Date.now();
       if (budgetLeft <= 0) return;
       if (attempt > 0 && budgetLeft < ENGINE_RETRY_BACKOFF_MS) return;
       const remaining = Math.max(1, budgetLeft);
+      const engineSignal = signal
+        ? AbortSignal.any([signal, controller.signal])
+        : controller.signal;
       try {
-        results = await engine.search(query, ctx, remaining, signal);
+        results = await engine.search(query, ctx, remaining, engineSignal);
       } catch (e) {
         if (e instanceof SearchCancelled) {
+          if (controller.signal.aborted && !signal?.aborted) return;
           cancelled = true;
           return;
         }
@@ -895,15 +901,20 @@ export async function autoTextSearch(
           cancelled = true;
           return;
         }
+        if (controller.signal.aborted) return;
       }
     }
     if (results && results.length) {
       aggregator.extend(results);
       seenProviders.add(engine.provider);
+      if (aggregator.size >= maxResults) controller.abort();
     }
   };
   while (i < engines.length) {
-    if (aggregator.size >= maxResults || cancelled) break;
+    if (aggregator.size >= maxResults || cancelled) {
+      controller.abort();
+      break;
+    }
     const engine = engines[i++];
     if (seenProviders.has(engine.provider)) continue;
     pending.push(run(engine));

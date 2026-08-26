@@ -92,6 +92,11 @@ describe("checkUrlAccess", () => {
     expect(allowed).toBe(true);
     expect(hostname).toBe("::1");
   });
+
+  it("accepts public ipv4 literals and leaves private ones to the DNS layer", () => {
+    expect(checkUrlAccess("https://93.184.216.34/", null)[0]).toBe(true);
+    expect(checkUrlAccess("https://8.8.8.8/x", null)[0]).toBe(true);
+  });
 });
 
 describe("normalizeDomain", () => {
@@ -105,6 +110,17 @@ describe("normalizeDomain", () => {
     expect(() => normalizeDomain("x.com:443")).toThrow();
     expect(() => normalizeDomain("")).toThrow();
     expect(() => normalizeDomain("0x7f.0.0.1")).toThrow();
+  });
+
+  it("accepts canonical public ipv4 literals", () => {
+    expect(normalizeDomain("93.184.216.34")).toBe("93.184.216.34");
+    expect(normalizeDomain("8.8.8.8.")).toBe("8.8.8.8");
+  });
+
+  it("rejects non-canonical and out-of-range numeric hosts", () => {
+    expect(() => normalizeDomain("256.1.1.1")).toThrow();
+    expect(() => normalizeDomain("001.002.003.004")).toThrow();
+    expect(() => normalizeDomain("1.2.3")).toThrow();
   });
 });
 

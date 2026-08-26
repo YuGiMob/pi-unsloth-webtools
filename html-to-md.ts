@@ -228,8 +228,11 @@ interface HtmlHandlers {
   handleCharRef(name: string): void;
 }
 
-const START_TAG_NAME_RE = /^[a-zA-Z][^\s/>]*/;
-const ATTR_NAME_RE = /^[^\s=/>]+/;
+const START_TAG_NAME_RE = /[a-zA-Z][^\s/>]*/y;
+const ATTR_NAME_RE = /[^\s=/>]+/y;
+const ENTITY_NAMED_RE = /&([A-Za-z][A-Za-z0-9.-]*);/y;
+const ENTITY_NUMERIC_RE = /&#([xX][0-9a-fA-F]+|[0-9]+);?/y;
+const ENTITY_LEGACY_RE = /&([A-Za-z][A-Za-z0-9.-]*)(?=[^A-Za-z0-9]|$)/y;
 
 const RAW_TEXT_TAGS = [
   "script",
@@ -242,9 +245,23 @@ const RAW_TEXT_TAGS = [
   "noframes",
 ];
 
-const RAW_TEXT_CLOSERS: Record<string, RegExp> = Object.fromEntries(
-  RAW_TEXT_TAGS.map((name) => [name, new RegExp(`</${name}\\s*>`, "i")]),
-);
+function findRawTextClose(
+  input: string,
+  lowerInput: string,
+  from: number,
+  name: string,
+): { start: number; end: number } | null {
+  const needle = `</${name}`;
+  let pos = from;
+  while (true) {
+    const hit = lowerInput.indexOf(needle, pos);
+    if (hit === -1) return null;
+    let j = hit + needle.length;
+    while (j < input.length && /\s/.test(input[j])) j++;
+    if (j < input.length && input[j] === ">") return { start: hit, end: j + 1 };
+    pos = hit + 1;
+  }
+}
 
 function parseAttrsUntilClose(input: string, pos: number): [AttrDict, number, boolean] {
   const attrs: AttrDict = {};
@@ -257,10 +274,11 @@ function parseAttrsUntilClose(input: string, pos: number): [AttrDict, number, bo
       pos++;
       continue;
     }
-    const nameMatch = ATTR_NAME_RE.exec(input.slice(pos));
+    ATTR_NAME_RE.lastIndex = pos;
+    const nameMatch = ATTR_NAME_RE.exec(input);
     if (!nameMatch) return [attrs, -1, false];
     const name = nameMatch[0].toLowerCase();
-    pos += nameMatch[0].length;
+    pos = nameMatch.index + nameMatch[0].length;
     while (pos < input.length && /\s/.test(input[pos])) pos++;
     let value: string | null = null;
     if (pos < input.length && input[pos] === "=") {
@@ -285,64 +303,69 @@ function parseAttrsUntilClose(input: string, pos: number): [AttrDict, number, bo
 }
 
 function scanTag(
-  html: string,
+  input: string,
   i: number,
 ): { end: number; kind: "comment" | "decl" | "end" | "start" | "startend"; name?: string; attrs?: AttrDict } | null {
-  const rest = html.slice(i + 1);
-  if (rest.startsWith("!--")) {
-    const close = html.indexOf("-->", i + 4);
+  if (input.startsWith("!--", i + 1)) {
+    const close = input.indexOf("-->", i + 4);
     if (close === -1) return null;
     return { end: close + 3, kind: "decl" };
   }
-  if (rest.startsWith("!") || rest.startsWith("?")) {
+  const next = input[i + 1];
+  if (next === "!" || next === "?") {
     let j = i + 2;
-    while (j < html.length && html[j] !== ">") j++;
-    if (j >= html.length) return null;
+    while (j < input.length && input[j] !== ">") j++;
+    if (j >= input.length) return null;
     return { end: j + 1, kind: "decl" };
   }
-  if (rest.startsWith("/")) {
+  if (next === "/") {
     let j = i + 2;
-    while (j < html.length && /[\s>]/.test(html[j]) === false) j++;
-    const name = html.slice(i + 2, j).toLowerCase();
+    while (j < input.length && !/[\s>]/.test(input[j])) j++;
+    const name = input.slice(i + 2, j).toLowerCase();
     if (!name) return null;
-    while (j < html.length && html[j] !== ">") j++;
-    if (j >= html.length) return null;
+    while (j < input.length && input[j] !== ">") j++;
+    if (j >= input.length) return null;
     return { end: j + 1, kind: "end", name };
   }
-  const nameMatch = START_TAG_NAME_RE.exec(rest);
+  START_TAG_NAME_RE.lastIndex = i + 1;
+  const nameMatch = START_TAG_NAME_RE.exec(input);
   if (!nameMatch) return null;
   const name = nameMatch[0].toLowerCase();
-  const [attrs, next, selfClosing] = parseAttrsUntilClose(html, i + 1 + nameMatch[0].length);
-  if (next === -1) return null;
-  return { end: next, kind: selfClosing ? "startend" : "start", name, attrs };
+  const [attrs, nextPos, selfClosing] = parseAttrsUntilClose(input, i + 1 + nameMatch[0].length);
+  if (nextPos === -1) return null;
+  return { end: nextPos, kind: selfClosing ? "startend" : "start", name, attrs };
 }
 
 
 export function feedHtml(input: string, handlers: HtmlHandlers): void {
-  const emitText = (text: string) => {
-    if (!text) return;
-    let pos = 0;
-    while (pos < text.length) {
-      const amp = text.indexOf("&", pos);
-      if (amp === -1) {
-        handlers.handleData(text.slice(pos));
+  let lowerInput: string | null = null;
+  const emitTextRange = (start: number, end: number) => {
+    if (end <= start) return;
+    let pos = start;
+    while (pos < end) {
+      const amp = input.indexOf("&", pos);
+      if (amp === -1 || amp >= end) {
+        handlers.handleData(input.slice(pos, end));
         return;
       }
-      if (amp > pos) handlers.handleData(text.slice(pos, amp));
-      const named = /^&([A-Za-z][A-Za-z0-9.-]*);/.exec(text.slice(amp));
-      if (named) {
+      if (amp > pos) handlers.handleData(input.slice(pos, amp));
+      ENTITY_NAMED_RE.lastIndex = amp;
+      const named = ENTITY_NAMED_RE.exec(input);
+      if (named && named.index === amp && amp + named[0].length <= end) {
         handlers.handleEntityRef(named[1]);
         pos = amp + named[0].length;
         continue;
       }
-      const numeric = /^&#([xX][0-9a-fA-F]+|[0-9]+);?/.exec(text.slice(amp));
-      if (numeric) {
+      ENTITY_NUMERIC_RE.lastIndex = amp;
+      const numeric = ENTITY_NUMERIC_RE.exec(input);
+      if (numeric && numeric.index === amp && amp + numeric[0].length <= end) {
         handlers.handleCharRef(numeric[1]);
         pos = amp + numeric[0].length;
         continue;
       }
-      const legacy = /^&([A-Za-z][A-Za-z0-9.-]*)(?=[^A-Za-z0-9]|$)/.exec(text.slice(amp));
-      if (legacy) {
+      ENTITY_LEGACY_RE.lastIndex = amp;
+      const legacy = ENTITY_LEGACY_RE.exec(input);
+      if (legacy && legacy.index === amp && amp + legacy[0].length <= end) {
         handlers.handleEntityRef(legacy[1]);
         pos = amp + legacy[0].length;
         continue;
@@ -364,28 +387,28 @@ export function feedHtml(input: string, handlers: HtmlHandlers): void {
       i++;
       continue;
     }
-    emitText(input.slice(textStart, i));
+    emitTextRange(textStart, i);
     if (tag.kind === "start") {
-      const rawCloser = RAW_TEXT_CLOSERS[tag.name!];
-      if (rawCloser) {
-        const after = input.slice(tag.end);
-        const closeMatch = rawCloser.exec(after);
-        if (closeMatch) {
-          handlers.handleStartTag(tag.name!, tag.attrs!);
-          emitText(after.slice(0, closeMatch.index));
-          handlers.handleEndTag(tag.name!);
-          textStart = tag.end + closeMatch.index + closeMatch[0].length;
+      const rawName = tag.name!;
+      if (RAW_TEXT_TAGS.includes(rawName)) {
+        lowerInput ??= input.toLowerCase();
+        const close = findRawTextClose(input, lowerInput, tag.end, rawName);
+        if (close) {
+          handlers.handleStartTag(rawName, tag.attrs!);
+          emitTextRange(tag.end, close.start);
+          handlers.handleEndTag(rawName);
+          textStart = close.end;
           i = textStart;
           continue;
         }
       }
-      handlers.handleStartTag(tag.name!, tag.attrs!);
+      handlers.handleStartTag(rawName, tag.attrs!);
     } else if (tag.kind === "startend") handlers.handleStartEndTag(tag.name!, tag.attrs!);
     else if (tag.kind === "end") handlers.handleEndTag(tag.name!);
     textStart = tag.end;
     i = tag.end;
   }
-  emitText(input.slice(textStart));
+  emitTextRange(textStart, input.length);
 }
 
 function popMarksAbove(marks: number[], index: number): void {

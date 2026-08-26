@@ -37,6 +37,11 @@ export function normalizeDomain(value: unknown): string {
     throw new Error("Website limits must contain domains without schemes or ports");
   }
   const numericParts = stripped.split(".");
+  const canonicalIpv4 =
+    numericParts.length === 4 &&
+    numericParts.every((part) => /^(?:0|[1-9][0-9]{0,2})$/.test(part)) &&
+    numericParts.every((part) => Number(part) <= 255);
+  if (canonicalIpv4) return stripped;
   if (
     numericParts.length <= 4 &&
     numericParts.every((part) => /^(?:0x[0-9a-f]+|[0-9]+)$/.test(part))

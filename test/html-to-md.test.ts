@@ -253,6 +253,19 @@ describe("html_to_markdown formatting", () => {
     expect(out.split("€").length - 1).toBe(3);
     expect(out.split("A").length - 1).toBe(2);
   });
+
+  it("decodes a legacy entity cut off by a tag", () => {
+    expect(htmlToMarkdown("<p>&amp<b>x</b></p>")).toBe("&**x**");
+    expect(htmlToMarkdown("<p>&notit;<b>y</b></p>")).toBe("¬it;**y**");
+  });
+
+  it("decodes a large entity-dense run without quadratic cost", () => {
+    const body = "&amp;".repeat(20_000);
+    const start = performance.now();
+    const out = htmlToMarkdown(`<p>${body}</p>`);
+    expect(out).toBe("&".repeat(20_000));
+    expect(performance.now() - start).toBeLessThan(5_000);
+  });
 });
 
 describe("self-closing tags", () => {

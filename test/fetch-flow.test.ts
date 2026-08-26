@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { brotliCompressSync, deflateRawSync, deflateSync, gzipSync } from "node:zlib";
 import {
+  FetchCancelledError,
   fetchPageText,
   fetchUrlRaw,
   looksLikeHtml,
@@ -426,7 +427,14 @@ describe("dns resolution budget", () => {
 
   it("reports cancellation when the signal aborts during resolution", async () => {
     const controller = new AbortController();
-    dnsLookupMock.mockImplementation(() => new Promise(() => {}));
+    dnsLookupMock.mockImplementation(
+      (_hostname: string, options: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          }, { once: true });
+        }),
+    );
     const resultPromise = fetchUrlRaw("https://example.com/", {
       signal: controller.signal,
       seams: {
@@ -439,7 +447,14 @@ describe("dns resolution budget", () => {
   });
 
   it("bounds dns resolution by the deadline", async () => {
-    dnsLookupMock.mockImplementation(() => new Promise(() => {}));
+    dnsLookupMock.mockImplementation(
+      (_hostname: string, options: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          }, { once: true });
+        }),
+    );
     const result = await fetchUrlRaw("https://example.com/", {
       deadlineMs: Date.now() + 50,
       seams: {
@@ -464,6 +479,71 @@ describe("dns resolution budget", () => {
     });
     expect(result.error).toBeNull();
     expect(result.body).toBe("ok");
+  });
+
+  it("prefers ipv4 when a host publishes both families", async () => {
+    dnsLookupMock.mockResolvedValue([
+      { address: "2606:4700:4700::1111", family: 6 },
+      { address: "93.184.216.34", family: 4 },
+    ]);
+    const seen: { ip: string; family: number }[] = [];
+    const result = await fetchUrlRaw("https://example.com/", {
+      seams: {
+        request: async (opts) => {
+          seen.push({ ip: opts.pinnedIp, family: opts.family });
+          return { status: 200, headers: {}, body: Buffer.from("ok") };
+        },
+      },
+    });
+    expect(result.error).toBeNull();
+    expect(seen).toEqual([{ ip: "93.184.216.34", family: 4 }]);
+  });
+
+  it("falls back to the next resolved address on connection failure", async () => {
+    const attempts: { ip: string; family: number }[] = [];
+    const result = await fetchUrlRaw("https://example.com/", {
+      seams: {
+        resolve: async () => ({
+          ok: true,
+          reason: "",
+          ip: "2606:4700:4700::1111",
+          family: 6,
+          alternates: [{ ip: "93.184.216.34", family: 4 }],
+        }),
+        request: async (opts) => {
+          attempts.push({ ip: opts.pinnedIp, family: opts.family });
+          if (opts.family === 6) throw new Error("ECONNREFUSED");
+          return { status: 200, headers: {}, body: Buffer.from("fallback ok") };
+        },
+      },
+    });
+    expect(result.error).toBeNull();
+    expect(result.body).toBe("fallback ok");
+    expect(attempts).toEqual([
+      { ip: "2606:4700:4700::1111", family: 6 },
+      { ip: "93.184.216.34", family: 4 },
+    ]);
+  });
+
+  it("does not fall back after cancellation or timeout", async () => {
+    let calls = 0;
+    const result = await fetchUrlRaw("https://example.com/", {
+      seams: {
+        resolve: async () => ({
+          ok: true,
+          reason: "",
+          ip: "2606:4700:4700::1111",
+          family: 6,
+          alternates: [{ ip: "93.184.216.34", family: 4 }],
+        }),
+        request: async () => {
+          calls++;
+          throw new FetchCancelledError();
+        },
+      },
+    });
+    expect(calls).toBe(1);
+    expect(result.error).toBe("Failed to fetch URL: cancelled.");
   });
 });
 
@@ -709,6 +789,25 @@ describe("download cap truncation", () => {
         seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
       });
       expect(out).not.toContain("(page truncated at the download limit)");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("does not mark an exact-cap body as truncated without a content-length", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("c".repeat(512));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    try {
+      const out = await fetchPageText(`http://example.com:${address.port}/`, {
+        timeoutMs: 5_000,
+        maxBytes: 512,
+        seams: { resolve: async () => ({ ok: true, reason: "", ip: "127.0.0.1", family: 4 }) },
+      });
+      expect(out).toBe("c".repeat(512));
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

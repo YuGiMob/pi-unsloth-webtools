@@ -337,6 +337,41 @@ describe("sweep deadline", () => {
   }, 10_000);
 });
 
+describe("sweep early exit", () => {
+  it("aborts in-flight engines once enough results arrive", async () => {
+    const universal = Array.from({ length: 5 }, (_, i) =>
+      [
+        `<div class="result"><div class="body"><h2><a href="https://example.com/d${i}">D${i}</a></h2><a href="https://example.com/d${i}">Snippet ${i}.</a></div></div>`,
+        `<div data-type="web"><a href="https://example.com/b${i}"><div class="title">B${i}</div></a></div>`,
+        `<div data-hveid="x"><a href="https://example.com/g${i}"><h3>G${i}</h3></a></div>`,
+        `<ul class="results"><li><h2><a href="https://example.com/m${i}">M${i}</a></h2><p class="s">snippet</p></li></ul>`,
+        `<div class="relsrch"><div class="Title"><h3><a href="https://example.com/y${i}">Y${i}</a></h3></div><div class="Text">text</div></div>`,
+        `<li class="serp-item"><h3><a href="https://example.com/x${i}">X${i}</a></h3><div class="text">snippet</div></li>`,
+      ].join(""),
+    ).join("");
+    let aborted = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, opts?: RequestInit) => {
+        if (String(url).includes("wikipedia.org")) {
+          return new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener("abort", () => {
+              aborted = true;
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          });
+        }
+        return Promise.resolve(new Response(universal, { status: 200 }));
+      }),
+    );
+    const start = performance.now();
+    const results = await autoTextSearch("cat", 5, 10_000);
+    expect(results.length).toBe(5);
+    expect(performance.now() - start).toBeLessThan(3_000);
+    expect(aborted).toBe(true);
+  }, 10_000);
+});
+
 describe("engine retry", () => {
   it("retries a transient failure once and keeps the retried results", async () => {
     let ddgCalls = 0;

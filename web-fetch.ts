@@ -1,4 +1,5 @@
 import { lookup as dnsLookup } from "node:dns/promises";
+import type { LookupAllOptions } from "node:dns";
 import http from "node:http";
 import https from "node:https";
 import { createBrotliDecompress, createGunzip, createInflate, createInflateRaw } from "node:zlib";
@@ -165,6 +166,7 @@ export interface ResolvedHost {
   reason: string;
   ip: string;
   family: number;
+  alternates?: { ip: string; family: number }[];
 }
 
 export interface FetchSeams {
@@ -204,14 +206,25 @@ export interface RawFetchResult {
 }
 
 function htmlProbe(body: string, re: RegExp): boolean {
-  let probe = body;
-  while (true) {
-    probe = probe.replace(/^[ \t\n\r\f\v]+/, "");
-    const stripped = probe.replace(/^(?:<!--[\s\S]*?-->|<\?[\s\S]*?\?>)/, "");
-    if (stripped === probe) break;
-    probe = stripped;
+  let i = 0;
+  const n = body.length;
+  while (i < n) {
+    while (i < n && /[ \t\n\r\f\v]/.test(body[i])) i++;
+    if (body.startsWith("<!--", i)) {
+      const close = body.indexOf("-->", i + 4);
+      if (close === -1) break;
+      i = close + 3;
+      continue;
+    }
+    if (body.startsWith("<?", i)) {
+      const close = body.indexOf("?>", i + 2);
+      if (close === -1) break;
+      i = close + 2;
+      continue;
+    }
+    break;
   }
-  return re.test(probe.slice(0, 256).toLowerCase());
+  return re.test(body.slice(i, i + 256).toLowerCase());
 }
 
 export function looksLikeHtml(body: string): boolean {
@@ -455,32 +468,15 @@ function decodeTis620(bytes: Buffer): string {
 }
 
 
-function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(new DOMException("aborted", "AbortError"));
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (err) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(err);
-      },
-    );
-  });
-}
-
 async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promise<ResolvedHost> {
   let addresses: { address: string; family: number }[];
   try {
-    addresses = await withAbort(dnsLookup(hostname, { all: true, verbatim: true }), signal);
+    const lookupOptions: LookupAllOptions & { signal?: AbortSignal } = {
+      all: true,
+      verbatim: true,
+      signal,
+    };
+    addresses = await dnsLookup(hostname, lookupOptions);
   } catch (err) {
     return { ok: false, reason: `Failed to resolve host: ${err}`, ip: "", family: 0 };
   }
@@ -492,8 +488,15 @@ async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promi
       return { ok: false, reason: `Blocked: refusing to fetch the non-public address ${entry.address}.`, ip: "", family: 0 };
     }
   }
+  addresses.sort((a, b) => (a.family === 4 ? 0 : 1) - (b.family === 4 ? 0 : 1));
   const first = addresses[0];
-  return { ok: true, reason: "", ip: first.address, family: first.family };
+  return {
+    ok: true,
+    reason: "",
+    ip: first.address,
+    family: first.family,
+    alternates: addresses.slice(1).map((entry) => ({ ip: entry.address, family: entry.family })),
+  };
 }
 
 
@@ -603,7 +606,8 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
         if (total >= limit) {
           truncated =
             codec !== null ||
-            !(Number.isFinite(declaredLength) && declaredLength === total);
+            take.length < chunk.length ||
+            (Number.isFinite(declaredLength) && declaredLength > total);
           decoder?.destroy();
           res.destroy();
           finish(null, Buffer.concat(chunks));
@@ -722,8 +726,9 @@ export async function fetchUrlRaw(
   let currentUrl = url;
   let pinnedIp = resolved.ip;
   let pinnedFamily = resolved.family;
+  let alternates: { ip: string; family: number }[] = resolved.alternates ?? [];
+  let alternateIndex = 0;
   const userAgent = randomUserAgent();
-
   for (let hop = 0; hop < MAX_REQUESTS; hop++) {
     const budgetResult = budgetExceededResult(deadline, signal, now);
     if (budgetResult !== null) return budgetResult;
@@ -752,6 +757,16 @@ export async function fetchUrlRaw(
         signal,
       });
     } catch (err) {
+      if (
+        !(err instanceof FetchCancelledError) &&
+        !(err instanceof FetchTimeoutError) &&
+        alternateIndex < alternates.length
+      ) {
+        const next = alternates[alternateIndex++];
+        pinnedIp = next.ip;
+        pinnedFamily = next.family;
+        continue;
+      }
       return { error: fetchErrorMessage(err), body: "", contentType: "" };
     }
 
@@ -782,6 +797,8 @@ export async function fetchUrlRaw(
       if (!redirected.ok) return { error: redirected.reason, body: "", contentType: "" };
       pinnedIp = redirected.ip;
       pinnedFamily = redirected.family;
+      alternates = redirected.alternates ?? [];
+      alternateIndex = 0;
       continue;
     }
 

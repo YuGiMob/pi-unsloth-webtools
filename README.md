@@ -39,6 +39,8 @@ Mirrors Unsloth Studio's `web_search` tool:
 - Transient engine failures (network errors or null responses) are retried once with a short
   backoff inside the same timeout budget (a retry that cannot fit in the remaining budget is
   skipped); timeouts and cancellations are never retried.
+- Sweeps stop as soon as enough results are gathered: engines still in flight are aborted
+  instead of being allowed to run to their timeout.
 
 ### web_fetch
 
@@ -48,11 +50,16 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 - URL validation: http/https only, no credentials or encoded hostnames, hostname/port checks (any
   port 1–65535 is permitted; SSRF protection is enforced at the resolved-IP layer, not by port
   allowlists).
+  Canonical public IPv4 literals are accepted like IPv6 literals; private literals are still
+  blocked at the resolved-IP layer.
 - DNS resolution with SSRF protection: every resolved address is validated against
   private/loopback/link-local/CGNAT/documentation/multicast/reserved ranges, then the validated IP
   is pinned for the connection (custom `lookup` + SNI `servername`), so DNS cannot rebind between
   validation and fetch; resolution shares the caller's abort signal and the overall deadline,
   so a stuck resolver cannot outlive the fetch.
+  When a host publishes both IPv4 and IPv6 addresses, IPv4 is preferred (broken IPv6 routes
+  cannot stall a fetch), and a connection failure falls back to the next validated address for
+  the same host before giving up.
 - GitHub repo root pages are rewritten to the unauthenticated README API
   (`Accept: application/vnd.github.raw+json`), falling back to the raw README URL
   (`raw.githubusercontent.com`, no API rate limit) and then to the HTML page on failure.

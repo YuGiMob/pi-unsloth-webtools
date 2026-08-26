@@ -697,6 +697,11 @@ function extractTextOps(bytes: Buffer): string {
         }
       }
     }
+    if (c === "'" || c === '"') {
+      if (inText) out.push("\n");
+      i++;
+      continue;
+    }
     const token = text.slice(i, i + 2);
     if (token === "BT") {
       inText = true;
