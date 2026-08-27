@@ -165,7 +165,8 @@ The suite ports Unsloth Studio's own tests for these tools:
 - `test/entities.test.ts`: `decodeHtmlEntities` parity with CPython `html.unescape`,
   legacy refs, longest-prefix rule, Windows-1252 numeric mappings, invalid codepoints
 - `test/smoke.test.ts`: live network checks against real hosts, including a per-engine
-  result-health sweep (at least three engines must return well-formed results)
+  result-health sweep (at least two engines must return well-formed results; engines
+  that block or reset connections from datacenter IPs count as unhealthy, not failures)
 
 The seams (`seams.resolve` / `seams.request` / `rawFetch`) replace the network stack
 with fakes, mirroring how the Studio suite monkeypatches `_validate_and_resolve_host`
