@@ -1228,26 +1228,7 @@ export async function fetchPageText(
     }
   }
   const originalUrl = url;
-  let fetchUrl = url;
-  let result = await rawFetch(fetchUrl, rawFetchOptions);
-  for (let hop = 1; hop < MAX_REQUESTS; hop++) {
-    if (result.error !== null) break;
-    if (!isHtmlContent(result.body, result.contentType)) break;
-    const nextUrl = metaRefreshUrl(result.body, fetchUrl);
-    if (!nextUrl) break;
-    fetchUrl = nextUrl;
-    const [refreshAllowed, refreshReason] = checkUrlAccess(fetchUrl, policy);
-    if (!refreshAllowed) {
-      result = { error: refreshReason, body: "", contentType: "" };
-      break;
-    }
-    const refreshBudget = budgetExceededResult(deadlineMs, signal, now);
-    if (refreshBudget !== null) {
-      result = refreshBudget;
-      break;
-    }
-    result = await rawFetch(fetchUrl, rawFetchOptions);
-  }
+  const result = await rawFetch(url, rawFetchOptions);
   if (result.error !== null) {
     if (!result.error.startsWith("Blocked:")) {
       if (useCache) {

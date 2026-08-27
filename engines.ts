@@ -969,7 +969,7 @@ export async function autoTextSearch(
   if (cancelled) throw new SearchCancelled();
   const results = rankResults(aggregator.extractDicts(), query);
   if (results.length) {
-    void recordSweepStats(query, maxResults, started, [...timedOutProviders].sort(), results.length);
+    void recordSweepStats(query, maxResults, started, [...timedOutProviders], results.length);
     return results.slice(0, maxResults);
   }
   if (timedOutProviders.size) {

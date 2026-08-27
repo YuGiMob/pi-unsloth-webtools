@@ -48,11 +48,18 @@ function settingsFiles(cwd?: string): string[] {
   return files;
 }
 
-export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
-  let result = MAX_RESULTS;
+async function settingsEntries(cwd?: string): Promise<Record<string, unknown>[]> {
+  const entries: Record<string, unknown>[] = [];
   for (const file of settingsFiles(cwd)) {
     const data = await readJson(file);
-    if (!data) continue;
+    if (data) entries.push(data);
+  }
+  return entries;
+}
+
+export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
+  let result = MAX_RESULTS;
+  for (const data of await settingsEntries(cwd)) {
     const candidate = pickNumber(data, [
       ["unslothWebTools", "maxResults"],
       ["webSearch", "maxResults"],
@@ -65,9 +72,7 @@ export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
 
 async function loadFetchSetting(cwd: string | undefined, paths: string[][], valid: (n: number) => boolean): Promise<number | undefined> {
   let result: number | undefined;
-  for (const file of settingsFiles(cwd)) {
-    const data = await readJson(file);
-    if (!data) continue;
+  for (const data of await settingsEntries(cwd)) {
     const candidate = pickNumber(data, paths);
     if (candidate !== undefined && valid(candidate)) result = candidate;
   }
@@ -93,9 +98,7 @@ export async function loadDefaultFetchTimeoutMs(cwd?: string): Promise<number | 
 export async function loadDefaultFetchSettings(cwd?: string): Promise<{ maxChars?: number; timeoutMs?: number }> {
   let maxChars: number | undefined;
   let timeoutMs: number | undefined;
-  for (const file of settingsFiles(cwd)) {
-    const data = await readJson(file);
-    if (!data) continue;
+  for (const data of await settingsEntries(cwd)) {
     const c = pickNumber(data, [["unslothWebTools", "maxChars"], ["webFetch", "maxChars"], ["smartFetchDefaultMaxChars"]]);
     if (c !== undefined && c > 0) maxChars = c;
     const t = pickNumber(data, [["unslothWebTools", "timeoutMs"], ["webFetch", "timeoutMs"], ["smartFetchDefaultTimeoutMs"]]);
