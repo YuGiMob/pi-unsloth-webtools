@@ -1,7 +1,10 @@
 import { randomBytes } from "node:crypto";
+import { appendFile, chmod, mkdir } from "node:fs/promises";
+import { dirname, isAbsolute, join } from "node:path";
 import { collapseWhitespace, decodeHtmlEntities, feedHtml } from "./html-to-md.ts";
 import type { AttrDict } from "./html-to-md.ts";
 import { randomUserAgent } from "./user-agents.ts";
+import { agentDir } from "./agent-dir.ts";
 export class EmptySweepError extends Error {
   constructor() {
     super("No results found");
@@ -9,8 +12,10 @@ export class EmptySweepError extends Error {
 }
 
 export class SearchTimeoutError extends Error {
-  constructor() {
+  providers: string[];
+  constructor(providers: string[] = []) {
     super("timed out");
+    this.providers = providers;
   }
 }
 
@@ -840,6 +845,40 @@ export function rankResults(docs: SearchResult[], query: string): SearchResult[]
   }
   return [...wiki, ...both, ...titleOnly, ...bodyOnly, ...neither];
 }
+async function recordSweepStats(query: string, maxResults: number, started: number, timedOutProviders: string[], resultCount: number): Promise<void> {
+  const flag = process.env.PI_UNSLOTH_WEBTOOLS_STATS?.trim();
+  if (!flag) return;
+  const lower = flag.toLowerCase();
+  if (lower === "0" || lower === "false" || lower === "no" || lower === "off") return;
+  const base = agentDir();
+  if (!base) return;
+  const isDefaultFlag = lower === "1" || lower === "true" || lower === "yes" || lower === "on";
+  const statsPath = isDefaultFlag ? join(base, "pi-unsloth-webtools-stats.jsonl") : isAbsolute(flag) ? flag : join(base, flag);
+  try {
+    const dir = dirname(statsPath);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") {
+      try {
+        await chmod(dir, 0o700);
+      } catch {}
+    }
+    const sortedProviders = [...timedOutProviders].sort();
+    const entry = JSON.stringify({
+      ts: new Date().toISOString(),
+      query,
+      maxResults,
+      durationMs: Date.now() - started,
+      timedOutProviders: sortedProviders,
+      resultCount,
+    });
+    await appendFile(statsPath, entry + "\n", { mode: 0o600 });
+    if (process.platform !== "win32") {
+      try {
+        await chmod(statsPath, 0o600);
+      } catch {}
+    }
+  } catch {}
+}
 
 function shuffledEngines(): Engine[] {
   const shuffled = [...TEXT_ENGINES];
@@ -858,13 +897,14 @@ export async function autoTextSearch(
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<SearchResult[]> {
+  const started = Date.now();
   const engines = shuffledEngines();
-  const deadline = Date.now() + timeoutMs;
+  const deadline = started + timeoutMs;
   const seenProviders = new Set<string>();
   const aggregator = new ResultsAggregator();
   const ctx: EngineContext = { region: "us-en", safesearch: "moderate" };
   const controller = new AbortController();
-  let timedOut = false;
+  const timedOutProviders = new Set<string>();
   let cancelled = false;
   const uniqueProviders = new Set(engines.map((e) => e.provider)).size;
   const maxWorkers = Math.min(uniqueProviders, Math.ceil(maxResults / 10) + 1);
@@ -890,7 +930,7 @@ export async function autoTextSearch(
           return;
         }
         if (e instanceof SearchTimeoutError) {
-          timedOut = true;
+          timedOutProviders.add(engine.name);
           return;
         }
       }
@@ -926,7 +966,15 @@ export async function autoTextSearch(
   await Promise.allSettled(pending);
   if (cancelled) throw new SearchCancelled();
   const results = rankResults(aggregator.extractDicts(), query);
-  if (results.length) return results.slice(0, maxResults);
-  if (timedOut) throw new SearchTimeoutError();
+  if (results.length) {
+    void recordSweepStats(query, maxResults, started, [...timedOutProviders].sort(), results.length);
+    return results.slice(0, maxResults);
+  }
+  if (timedOutProviders.size) {
+    const sorted = [...timedOutProviders].sort();
+    void recordSweepStats(query, maxResults, started, sorted, 0);
+    throw new SearchTimeoutError(sorted);
+  }
+  void recordSweepStats(query, maxResults, started, [], 0);
   throw new EmptySweepError();
 }

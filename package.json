@@ -32,6 +32,7 @@
     "pdf.ts",
     "user-agents.ts",
     "cache.ts",
+    "agent-dir.ts",
     "README.md",
     "LICENSE"
   ],

@@ -1,4 +1,4 @@
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { webSearch as defaultWebSearch } from "./web-search.ts";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchPageText as defaultFetchPageText } from "./web-fetch.ts";
@@ -96,6 +96,7 @@ export function createWebTools(deps: WebToolsDeps = {}) {
           signal: signal ?? undefined,
           timeoutMs: positiveNumber(params.timeoutMs),
           maxResults: positiveNumber(params.maxResults),
+          cwd: (_ctx as ExtensionContext | undefined)?.cwd,
         });
         return { content: [{ type: "text", text }], details: {} };
       },

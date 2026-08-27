@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile, chmod } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { agentDir } from "./agent-dir.ts";
 import { canonicalizeHref } from "./engines.ts";
 
 const CACHE_TTL_MS = 60 * 60 * 1000;
@@ -12,10 +13,8 @@ const STALE_MAX_AGE_MS = 24 * CACHE_TTL_MS;
 function cacheDir(): string {
   const env = process.env.PI_UNSLOTH_CACHE_DIR?.trim();
   if (env) return env;
-  try {
-    const home = homedir();
-    if (home) return join(home, ".pi", "agent", "pi-unsloth-cache");
-  } catch {}
+  const base = agentDir();
+  if (base) return join(base, "pi-unsloth-cache");
   return join(tmpdir(), "pi-unsloth-cache");
 }
 

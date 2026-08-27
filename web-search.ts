@@ -1,5 +1,8 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { checkUrlAccess, scopeSearchQuery, type WebsitePolicy } from "./web-access.ts";
 import { collapseWhitespace } from "./html-to-md.ts";
+import { agentDir } from "./agent-dir.ts";
 import {
   autoTextSearch,
   EmptySweepError,
@@ -41,13 +44,50 @@ export interface WebSearchOptions {
   signal?: AbortSignal;
   websitePolicy?: WebsitePolicy | null;
   client?: SearchClient;
+  cwd?: string;
+}
+
+async function readMaxResultsFromFile(file: string): Promise<number | undefined> {
+  try {
+    const raw = await readFile(file, "utf-8");
+    const data = JSON.parse(raw) as {
+      unslothWebTools?: { maxResults?: unknown };
+      webSearch?: { maxResults?: unknown };
+      smartWebSearch?: { resultsPerQuery?: unknown };
+    };
+    const candidate =
+      data.unslothWebTools?.maxResults ??
+      data.webSearch?.maxResults ??
+      data.smartWebSearch?.resultsPerQuery;
+    if (typeof candidate !== "number" || !Number.isFinite(candidate)) return undefined;
+    return Math.floor(candidate);
+  } catch {
+    return undefined;
+  }
+}
+
+function clampMaxResults(value: number): number {
+  return Math.min(20, Math.max(1, value));
+}
+
+export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
+  let result = MAX_RESULTS;
+  const base = agentDir();
+  const globalFile = base ? join(base, "settings.json") : "";
+  const files = globalFile ? [globalFile] : [];
+  if (cwd) files.push(join(cwd, ".pi", "settings.json"));
+  for (const file of files) {
+    const configured = await readMaxResultsFromFile(file);
+    if (configured !== undefined) result = clampMaxResults(configured);
+  }
+  return result;
 }
 
 export async function webSearch(
   query: string | undefined,
   options: WebSearchOptions = {},
 ): Promise<string> {
-  const maxResults = options.maxResults ?? MAX_RESULTS;
+  const maxResults = options.maxResults ?? (await loadDefaultMaxResults(options.cwd));
   const timeoutMs = options.timeoutMs ?? SEARCH_TIMEOUT_MS;
   const signal = options.signal;
   const policy = options.websitePolicy ?? null;
@@ -83,6 +123,8 @@ export async function webSearch(
 export function searchFailureMessage(exc: unknown, timeoutMs = SEARCH_TIMEOUT_MS): string {
   if (exc instanceof SearchCancelled) return "Search cancelled.";
   if (exc instanceof SearchTimeoutError) {
+    const providers = [...((exc as SearchTimeoutError).providers ?? [])].sort();
+    if (providers.length) return `Search failed: the search engines (${providers.join(", ")}) did not respond within ${Math.round(timeoutMs / 1000)} seconds.`;
     return `Search failed: the search engines did not respond within ${Math.round(timeoutMs / 1000)} seconds.`;
   }
   if (exc instanceof EmptySweepError || (exc instanceof Error && exc.message.includes("No results found"))) {

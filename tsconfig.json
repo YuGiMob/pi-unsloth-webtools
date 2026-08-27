@@ -27,6 +27,7 @@
     "pdf.ts",
     "user-agents.ts",
     "cache.ts",
+    "agent-dir.ts",
     "test/**/*.ts"
   ]
 }
