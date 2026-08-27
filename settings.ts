@@ -40,13 +40,17 @@ function clampMaxResults(value: number): number {
   return Math.min(20, Math.max(1, value));
 }
 
-export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
-  let result = MAX_RESULTS;
+function settingsFiles(cwd?: string): string[] {
   const base = agentDir();
   const globalFile = base ? join(base, "settings.json") : "";
   const files = globalFile ? [globalFile] : [];
   if (cwd) files.push(join(cwd, ".pi", "settings.json"));
-  for (const file of files) {
+  return files;
+}
+
+export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
+  let result = MAX_RESULTS;
+  for (const file of settingsFiles(cwd)) {
     const data = await readJson(file);
     if (!data) continue;
     const candidate = pickNumber(data, [
@@ -61,11 +65,7 @@ export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
 
 async function loadFetchSetting(cwd: string | undefined, paths: string[][], valid: (n: number) => boolean): Promise<number | undefined> {
   let result: number | undefined;
-  const base = agentDir();
-  const globalFile = base ? join(base, "settings.json") : "";
-  const files = globalFile ? [globalFile] : [];
-  if (cwd) files.push(join(cwd, ".pi", "settings.json"));
-  for (const file of files) {
+  for (const file of settingsFiles(cwd)) {
     const data = await readJson(file);
     if (!data) continue;
     const candidate = pickNumber(data, paths);
@@ -93,11 +93,7 @@ export async function loadDefaultFetchTimeoutMs(cwd?: string): Promise<number | 
 export async function loadDefaultFetchSettings(cwd?: string): Promise<{ maxChars?: number; timeoutMs?: number }> {
   let maxChars: number | undefined;
   let timeoutMs: number | undefined;
-  const base = agentDir();
-  const globalFile = base ? join(base, "settings.json") : "";
-  const files = globalFile ? [globalFile] : [];
-  if (cwd) files.push(join(cwd, ".pi", "settings.json"));
-  for (const file of files) {
+  for (const file of settingsFiles(cwd)) {
     const data = await readJson(file);
     if (!data) continue;
     const c = pickNumber(data, [["unslothWebTools", "maxChars"], ["webFetch", "maxChars"], ["smartFetchDefaultMaxChars"]]);
@@ -107,3 +103,4 @@ export async function loadDefaultFetchSettings(cwd?: string): Promise<{ maxChars
   }
   return { maxChars, timeoutMs };
 }
+

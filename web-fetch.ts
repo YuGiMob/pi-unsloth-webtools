@@ -30,6 +30,21 @@ const MAX_PDF_FETCH_BYTES = 10 * 1024 * 1024;
 const MAX_REQUESTS = 5;
 export const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
 export { loadDefaultFetchMaxChars, loadDefaultFetchTimeoutMs, loadDefaultFetchSettings } from "./settings.ts";
+function remainingMs(deadline: number, now: () => number): number {
+  return Math.max(1, deadline - now());
+}
+
+function clampedRemainingMs(deadline: number, now: () => number): number {
+  return Math.min(MAX_SIGNAL_TIMEOUT_MS, remainingMs(deadline, now));
+}
+
+function withTruncation(text: string, truncated: boolean): string {
+  return truncated ? text + TRUNCATED_BODY_NOTICE : text;
+}
+
+function preserveTruncationNotice(original: string, converted: string): string {
+  return original.endsWith(TRUNCATED_BODY_SUFFIX) && !converted.endsWith(TRUNCATED_BODY_SUFFIX) ? converted + TRUNCATED_BODY_NOTICE : converted;
+}
 
 const UTF32_LE_BOM = Buffer.from([0xff, 0xfe, 0x00, 0x00]);
 const UTF32_BE_BOM = Buffer.from([0x00, 0x00, 0xfe, 0xff]);
@@ -579,6 +594,8 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
         callback(null, [{ address: opts.pinnedIp, family: opts.family }]),
     };
     let settled = false;
+    let resRef: IncomingMessage | null = null;
+    let decoderRef: Transform | null = null;
     const settle = (action: () => void) => {
       if (settled) return;
       settled = true;
@@ -586,6 +603,7 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
       action();
     };
     const request = transport.request(options, (res: IncomingMessage) => {
+      resRef = res;
       const codec = contentEncodingCodec(res.headers["content-encoding"]);
       const chunks: Buffer[] = [];
       let total = 0;
@@ -662,6 +680,8 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
         let rawFallbackTried = false;
         let resEnded = false;
         const wire = (d: Transform) => {
+          decoderRef = d;
+          decoder = d;
           d.on("data", (chunk: Buffer) => {
             outputStarted = true;
             acceptData(chunk);
@@ -679,6 +699,7 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
               rawFallbackTried = true;
               d.destroy();
               decoder = createInflateRaw({ maxOutputLength: MAX_DECOMPRESSED_BYTES });
+              decoderRef = decoder;
               wire(decoder);
               for (const buffered of rawBuffer) decoder.write(buffered);
               if (resEnded) decoder.end();
@@ -693,6 +714,7 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
           });
         };
         decoder = createDecodeStream(codec);
+        decoderRef = decoder;
         wire(decoder);
         res.on("data", (chunk: Buffer) => {
           if (settled) return;
@@ -717,7 +739,11 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
         finish(err.message, Buffer.concat(chunks));
       });
     });
-    const onAbort = () => request.destroy(new FetchCancelledError());
+    const onAbort = () => {
+      decoderRef?.destroy();
+      resRef?.destroy();
+      request.destroy(new FetchCancelledError());
+    };
     opts.signal?.addEventListener("abort", onAbort, { once: true });
     request.on("timeout", () => request.destroy(new FetchTimeoutError()));
     request.on("error", (err) => settle(() => reject(err)));
@@ -742,7 +768,7 @@ export async function fetchUrlRaw(
   const resolveHost = seams.resolve ?? resolveAndValidate;
   const performRequest = seams.request ?? requestHop;
   const resolveWithBudget = async (hostname: string): Promise<ResolvedHost> => {
-    const deadlineSignal = AbortSignal.timeout(Math.min(MAX_SIGNAL_TIMEOUT_MS, Math.max(1, deadline - now())));
+    const deadlineSignal = AbortSignal.timeout(clampedRemainingMs(deadline, now));
     const resolveSignal = signal ? AbortSignal.any([signal, deadlineSignal]) : deadlineSignal;
     const resolved = await resolveHost(hostname, resolveSignal);
     if (resolved.ok) return resolved;
@@ -776,7 +802,7 @@ export async function fetchUrlRaw(
       "Accept-Encoding": "identity",
     };
     if (options.extraHeaders) Object.assign(headers, options.extraHeaders);
-    const inactivity = Math.max(1, deadline - now());
+    const inactivity = remainingMs(deadline, now);
     let response: HopResponse;
     try {
       response = await performRequest({
@@ -870,7 +896,7 @@ export async function fetchUrlRaw(
       const budgetResult = budgetExceededResult(deadline, signal, now, contentType);
       if (budgetResult !== null) return budgetResult;
       if (!pdfText) pdfText = "(PDF contains no extractable text)";
-      if (response.truncated) pdfText += TRUNCATED_BODY_NOTICE;
+      pdfText = withTruncation(pdfText, Boolean(response.truncated));
       return { error: null, body: pdfText, contentType: "application/pdf" };
     }
 
@@ -891,11 +917,13 @@ export async function fetchUrlRaw(
 
     const declaredCodec = declaredCharset ? normalizeCharset(declaredCharset) : null;
     const bomCodec = bomCodecFor(response.body);
-    const rawHtml =
+    const rawHtml = withTruncation(
       decodeWithCodec(
         response.body,
         bomCodec ?? declaredCodec ?? sniffMetaCharsetForHtml(response.body, contentType) ?? "utf-8",
-      ) + (response.truncated ? TRUNCATED_BODY_NOTICE : "");
+      ),
+      Boolean(response.truncated),
+    );
     const nextUrl = isHtmlContent(rawHtml, contentType) ? metaRefreshUrl(rawHtml, currentUrl) : null;
     if (nextUrl) {
       const [refreshAllowed, refreshReason, refreshHost] = checkUrlAccess(nextUrl, policy);
@@ -921,7 +949,7 @@ export async function fetchUrlRaw(
         if (!looksBinary(candidate)) alt = candidate;
       }
       if (alt !== null) {
-        if (response.truncated) alt += TRUNCATED_BODY_NOTICE;
+        alt = withTruncation(alt, Boolean(response.truncated));
         return { error: null, body: alt, contentType };
       }
       return emptyResult(
@@ -1024,8 +1052,14 @@ const META_KEYS: Record<string, keyof PageMeta> = {
 
 function cutAtCharBoundary(text: string, maxChars: number): string {
   const sliced = text.slice(0, maxChars);
+  if (!sliced) return sliced;
   const last = sliced.charCodeAt(sliced.length - 1);
-  return last >= 0xd800 && last <= 0xdbff ? sliced.slice(0, -1) : sliced;
+  if (last >= 0xd800 && last <= 0xdbff) return sliced.slice(0, -1);
+  if (last >= 0xdc00 && last <= 0xdfff) {
+    const prev = sliced.length >= 2 ? sliced.charCodeAt(sliced.length - 2) : 0;
+    if (prev < 0xd800 || prev > 0xdbff) return sliced.slice(0, -1);
+  }
+  return sliced;
 }
 
 function capMetaValue(value: string): string {
@@ -1069,10 +1103,7 @@ function pagePrefixedMarkdown(html: string): string {
   if (meta.site) lines.push(`Site: ${meta.site}`);
   const markdown = htmlToMarkdown(html, true);
   const converted = lines.length ? `${lines.join("\n")}\n\n${markdown}` : markdown;
-  if (html.endsWith(TRUNCATED_BODY_SUFFIX) && !converted.endsWith(TRUNCATED_BODY_SUFFIX)) {
-    return converted + TRUNCATED_BODY_NOTICE;
-  }
-  return converted;
+  return preserveTruncationNotice(html, converted);
 }
 
 function formatReadmeBody(body: string): string {
