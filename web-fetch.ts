@@ -134,13 +134,13 @@ function fetchErrorMessage(err: unknown): string {
   return `Failed to fetch URL: ${message}`;
 }
 
+function emptyResult(error: string, contentType = ""): RawFetchResult {
+  return { error, body: "", contentType };
+}
+
 function statusErrorResult(status: number): RawFetchResult {
   const reason = http.STATUS_CODES[status] ?? "";
-  return {
-    error: `Failed to fetch URL: HTTP ${status}${reason ? ` ${reason}` : ""}`,
-    body: "",
-    contentType: "",
-  };
+  return emptyResult(`Failed to fetch URL: HTTP ${status}${reason ? ` ${reason}` : ""}`);
 }
 
 export interface FetchPageOptions {
@@ -506,8 +506,8 @@ function budgetExceededResult(
   now: () => number = Date.now,
   contentType = "",
 ): RawFetchResult | null {
-  if (signal?.aborted) return { error: FETCH_CANCELLED_MESSAGE, body: "", contentType };
-  if (deadline !== null && now() >= deadline) return { error: FETCH_TIMEOUT_MESSAGE, body: "", contentType };
+  if (signal?.aborted) return emptyResult(FETCH_CANCELLED_MESSAGE, contentType);
+  if (deadline !== null && now() >= deadline) return emptyResult(FETCH_TIMEOUT_MESSAGE, contentType);
   return null;
 }
 
@@ -715,11 +715,11 @@ export async function fetchUrlRaw(
   };
   url = normalizeUrlScheme(url);
   const [allowed, reason, hostname] = checkUrlAccess(url, policy);
-  if (!allowed) return { error: reason, body: "", contentType: "" };
+  if (!allowed) return emptyResult(reason);
   const budgetResult = budgetExceededResult(deadline, signal, now);
   if (budgetResult !== null) return budgetResult;
   let resolved = await resolveWithBudget(hostname);
-  if (!resolved.ok) return { error: resolved.reason, body: "", contentType: "" };
+  if (!resolved.ok) return emptyResult(resolved.reason);
 
   let currentUrl = url;
   let pinnedIp = resolved.ip;
@@ -765,7 +765,7 @@ export async function fetchUrlRaw(
         pinnedFamily = next.family;
         continue;
       }
-      return { error: fetchErrorMessage(err), body: "", contentType: "" };
+      return emptyResult(fetchErrorMessage(err));
     }
 
     if (response.status >= 300 && response.status < 400) {
@@ -775,24 +775,20 @@ export async function fetchUrlRaw(
       const rawLocation = response.headers.location;
       const location = Array.isArray(rawLocation) ? rawLocation[0] : rawLocation;
       if (!location) {
-        return {
-          error: "Failed to fetch URL: the redirect is missing a Location header.",
-          body: "",
-          contentType: "",
-        };
+        return emptyResult("Failed to fetch URL: the redirect is missing a Location header.");
       }
       try {
         currentUrl = new URL(location, currentUrl).toString();
       } catch {
-        return { error: "Failed to fetch URL: the redirect has an invalid Location.", body: "", contentType: "" };
+        return emptyResult("Failed to fetch URL: the redirect has an invalid Location.");
       }
       const [redirectAllowed, redirectReason, redirectHost] = checkUrlAccess(
         currentUrl,
         policy,
       );
-      if (!redirectAllowed) return { error: redirectReason, body: "", contentType: "" };
+      if (!redirectAllowed) return emptyResult(redirectReason);
       const redirected = await resolveWithBudget(redirectHost);
-      if (!redirected.ok) return { error: redirected.reason, body: "", contentType: "" };
+      if (!redirected.ok) return emptyResult(redirected.reason);
       pinnedIp = redirected.ip;
       pinnedFamily = redirected.family;
       alternates = redirected.alternates ?? [];
@@ -827,13 +823,12 @@ export async function fetchUrlRaw(
       try {
         pdfText = await extractPdfText(response.body);
       } catch {
-        return {
-          error: response.truncated
+        return emptyResult(
+          response.truncated
             ? "(PDF content could not be read as text; the download was truncated at the download limit)"
             : "(PDF content could not be read as text)",
-          body: "",
           contentType,
-        };
+        );
       }
       const budgetResult = budgetExceededResult(deadline, signal, now, contentType);
       if (budgetResult !== null) return budgetResult;
@@ -844,19 +839,17 @@ export async function fetchUrlRaw(
 
     if (!isTextCandidateContentType(contentType)) {
       const safeType = parseContentType(contentType) || "unknown type";
-      return {
-        error: `(non-text content: ${safeType}, ${response.body.length} bytes; not readable as text)`,
-        body: "",
+      return emptyResult(
+        `(non-text content: ${safeType}, ${response.body.length} bytes; not readable as text)`,
         contentType,
-      };
+      );
     }
 
     if (hasBinaryMagic(response.body)) {
-      return {
-        error: `(binary content, ${response.body.length} bytes; not readable as text)`,
-        body: "",
+      return emptyResult(
+        `(binary content, ${response.body.length} bytes; not readable as text)`,
         contentType,
-      };
+      );
     }
 
     const declaredCodec = declaredCharset ? normalizeCharset(declaredCharset) : null;
@@ -880,16 +873,15 @@ export async function fetchUrlRaw(
         if (response.truncated) alt += TRUNCATED_BODY_NOTICE;
         return { error: null, body: alt, contentType };
       }
-      return {
-        error: `(binary content, ${response.body.length} bytes; not readable as text)`,
-        body: "",
+      return emptyResult(
+        `(binary content, ${response.body.length} bytes; not readable as text)`,
         contentType,
-      };
+      );
     }
 
     return { error: null, body: rawHtml, contentType };
   }
-  return { error: "Failed to fetch URL: too many redirects.", body: "", contentType: "" };
+  return emptyResult("Failed to fetch URL: too many redirects.");
 }
 
 function bomCodecFor(bytes: Buffer): string | null {
@@ -1074,10 +1066,10 @@ async function fetchWaybackSnapshot(
   let timestamp = "";
   try {
     const data = JSON.parse(availResult.body) as {
-      archived_snapshots?: { closest?: { available?: boolean; url?: string; timestamp?: string; status?: string } };
+      archived_snapshots?: { closest?: { available?: boolean; url?: string; timestamp?: string; status?: string | number } };
     };
     const closest = data.archived_snapshots?.closest;
-    if (closest?.available && closest.url && closest.status === "200") {
+    if (closest?.available && closest.url && String(closest.status) === "200") {
       snapshotUrl = closest.url;
       timestamp = closest.timestamp ?? "";
     }

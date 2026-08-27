@@ -1086,8 +1086,13 @@ function visibleLineChars(line: string): number {
   let openBracket = false;
   while (i < n) {
     if (line[i] === "\\") {
-      total += 2;
-      i += 2;
+      if (i + 1 < n) {
+        total += 2;
+        i += 2;
+      } else {
+        total += 1;
+        i += 1;
+      }
       continue;
     }
     if (line[i] === "[") openBracket = true;
@@ -1097,7 +1102,11 @@ function visibleLineChars(line: string): number {
       while (j < n && depth) {
         const char = line[j];
         if (char === "\\") {
-          j += 2;
+          if (j + 1 < n) {
+            j += 2;
+          } else {
+            j += 1;
+          }
           continue;
         }
         depth += (char === "(" ? 1 : 0) - (char === ")" ? 1 : 0);

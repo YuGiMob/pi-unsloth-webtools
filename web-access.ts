@@ -7,6 +7,7 @@ const SITE_FILTER_LIMIT = 8;
 const DOTTED_HOST_RE = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 const PORT_RE = /^[0-9]{1,5}$/;
 
+const INVALID_HOST_REASON = "Blocked: the URL has an invalid hostname or port.";
 export interface WebsitePolicy {
   allowedDomains: string[];
   blockedDomains: string[];
@@ -21,11 +22,12 @@ export function normalizeDomain(value: unknown): string {
   ) {
     throw new Error(`Invalid website domain: ${String(value)}`);
   }
-  const bracketed = domain.startsWith("[") && domain.endsWith("]");
-  if (domain.startsWith("[") !== domain.endsWith("]")) {
+  const startsBracket = domain.startsWith("[");
+  const endsBracket = domain.endsWith("]");
+  if (startsBracket !== endsBracket) {
     throw new Error(`Invalid website domain: ${String(value)}`);
   }
-  const stripped = (bracketed ? domain.slice(1, -1) : domain).replace(/\.+$/, "");
+  const stripped = (startsBracket ? domain.slice(1, -1) : domain).replace(/\.+$/, "");
   if (/^[0-9a-fA-F:.]+$/.test(stripped) && stripped.includes(":")) {
     try {
       return compressIpv6(stripped);
@@ -194,7 +196,7 @@ export function checkUrlAccess(
   try {
     parsed = new URL(candidate);
   } catch {
-    return [false, "Blocked: the URL has an invalid hostname or port.", ""];
+    return [false, INVALID_HOST_REASON, ""];
   }
   const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
   if (scheme !== "http" && scheme !== "https") {
@@ -204,20 +206,16 @@ export function checkUrlAccess(
     return [false, "Blocked: URLs with credentials or encoded hostnames are not allowed.", ""];
   }
   if (!parsed.hostname) {
-    return [false, "Blocked: the URL has an invalid hostname or port.", ""];
+    return [false, INVALID_HOST_REASON, ""];
   }
-  try {
-    if (parsed.port && !(PORT_RE.test(parsed.port) && Number(parsed.port) >= 1 && Number(parsed.port) <= 65535)) {
-      return [false, "Blocked: the URL has an invalid hostname or port.", ""];
-    }
-  } catch {
-    return [false, "Blocked: the URL has an invalid hostname or port.", ""];
+  if (parsed.port && !(PORT_RE.test(parsed.port) && Number(parsed.port) >= 1 && Number(parsed.port) <= 65535)) {
+    return [false, INVALID_HOST_REASON, ""];
   }
   let hostname: string;
   try {
     hostname = normalizeDomain(parsed.hostname);
   } catch {
-    return [false, "Blocked: the URL has an invalid hostname or port.", ""];
+    return [false, INVALID_HOST_REASON, ""];
   }
   if (!policyAllows(hostname, policy)) {
     return [false, `Blocked: the website access policy disallows ${hostname}.`, hostname];
@@ -341,14 +339,21 @@ function parseGithubRepo(url: string): { owner: string; repo: string; rest: stri
   if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(repo)) return null;
   return { owner, repo, rest: parts.slice(2) };
 }
-export function githubRepoReadmeApiUrl(url: string): string | null {
+function githubRepoRoot(url: string): { owner: string; repo: string; rest: string[] } | null {
   const parsed = parseGithubRepo(url);
   if (!parsed || parsed.rest.length !== 0) return null;
+  return parsed;
+}
+
+export function githubRepoReadmeApiUrl(url: string): string | null {
+  const parsed = githubRepoRoot(url);
+  if (!parsed) return null;
   return `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/readme`;
 }
+
 export function githubRepoRawReadmeUrl(url: string): string | null {
-  const parsed = parseGithubRepo(url);
-  if (!parsed || parsed.rest.length !== 0) return null;
+  const parsed = githubRepoRoot(url);
+  if (!parsed) return null;
   return `https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/HEAD/README.md`;
 }
 export function githubRawContentUrl(url: string): string | null {
