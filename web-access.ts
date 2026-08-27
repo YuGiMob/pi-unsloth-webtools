@@ -6,6 +6,11 @@ const MAX_CACHEABLE_DOMAIN_LEN = 253;
 const SITE_FILTER_LIMIT = 8;
 const DOTTED_HOST_RE = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 const PORT_RE = /^[0-9]{1,5}$/;
+export const MAX_SIGNAL_TIMEOUT_MS = 2 ** 31 - 1;
+
+function throwInvalidDomain(value: unknown): never {
+  throw new Error(`Invalid website domain: ${String(value)}`);
+}
 
 const INVALID_HOST_REASON = "Blocked: the URL has an invalid hostname or port.";
 export interface WebsitePolicy {
@@ -20,19 +25,19 @@ export function normalizeDomain(value: unknown): string {
     [...domain].some((char) => char.charCodeAt(0) < 32) ||
     ["\\", "/", "@", "?", "#"].some((char) => domain.includes(char))
   ) {
-    throw new Error(`Invalid website domain: ${String(value)}`);
+    throwInvalidDomain(value);
   }
   const startsBracket = domain.startsWith("[");
   const endsBracket = domain.endsWith("]");
   if (startsBracket !== endsBracket) {
-    throw new Error(`Invalid website domain: ${String(value)}`);
+    throwInvalidDomain(value);
   }
   const stripped = (startsBracket ? domain.slice(1, -1) : domain).replace(/\.+$/, "");
   if (/^[0-9a-fA-F:.]+$/.test(stripped) && stripped.includes(":")) {
     try {
       return compressIpv6(stripped);
     } catch {
-      throw new Error(`Invalid website domain: ${String(value)}`);
+      throwInvalidDomain(value);
     }
   }
   if (stripped.includes(":")) {
@@ -54,13 +59,13 @@ export function normalizeDomain(value: unknown): string {
   try {
     asciiDomain = domainToASCII(stripped).toLowerCase();
   } catch {
-    throw new Error(`Invalid website domain: ${String(value)}`);
+    throwInvalidDomain(value);
   }
   if (
     asciiDomain.length > 253 ||
     !asciiDomain.split(".").every((label) => DOMAIN_LABEL_RE.test(label))
   ) {
-    throw new Error(`Invalid website domain: ${String(value)}`);
+    throwInvalidDomain(value);
   }
   return asciiDomain;
 }

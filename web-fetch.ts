@@ -11,6 +11,7 @@ import {
   githubRepoRawReadmeUrl,
   githubRepoReadmeApiUrl,
   isPublicIp,
+  MAX_SIGNAL_TIMEOUT_MS,
   normalizeUrlScheme,
   type WebsitePolicy,
 } from "./web-access.ts";
@@ -26,7 +27,6 @@ const MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
 const META_VALUE_MAX_CHARS = 300;
 const MAX_PDF_FETCH_BYTES = 10 * 1024 * 1024;
 const MAX_REQUESTS = 5;
-const MAX_SIGNAL_TIMEOUT_MS = 2 ** 31 - 1;
 export const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
 
 const UTF32_LE_BOM = Buffer.from([0xff, 0xfe, 0x00, 0x00]);
@@ -122,8 +122,8 @@ export class FetchTimeoutError extends Error {
 }
 const FETCH_CANCELLED_MESSAGE = "Failed to fetch URL: cancelled.";
 const FETCH_TIMEOUT_MESSAGE = "Failed to fetch URL: timed out.";
-const TRUNCATED_BODY_NOTICE = "\n\n... (page truncated at the download limit)";
 const TRUNCATED_BODY_SUFFIX = "... (page truncated at the download limit)";
+const TRUNCATED_BODY_NOTICE = "\n\n" + TRUNCATED_BODY_SUFFIX;
 
 function fetchErrorMessage(err: unknown): string {
   if (err instanceof FetchCancelledError) return FETCH_CANCELLED_MESSAGE;

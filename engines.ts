@@ -5,6 +5,7 @@ import { collapseWhitespace, decodeHtmlEntities, feedHtml } from "./html-to-md.t
 import type { AttrDict } from "./html-to-md.ts";
 import { randomUserAgent } from "./user-agents.ts";
 import { agentDir } from "./agent-dir.ts";
+import { MAX_SIGNAL_TIMEOUT_MS } from "./web-access.ts";
 export class EmptySweepError extends Error {
   constructor() {
     super("No results found");
@@ -561,7 +562,8 @@ async function httpFetch(
         .join("; ")
     : null;
   if (cookie) headers["Cookie"] = cookie;
-  const signals: AbortSignal[] = [AbortSignal.timeout(options.timeoutMs)];
+  const timeoutMs = Math.min(MAX_SIGNAL_TIMEOUT_MS, Math.max(1, options.timeoutMs));
+  const signals: AbortSignal[] = [AbortSignal.timeout(timeoutMs)];
   if (options.signal) signals.push(options.signal);
   let response: Response;
   try {
