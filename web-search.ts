@@ -1,8 +1,6 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { checkUrlAccess, scopeSearchQuery, type WebsitePolicy } from "./web-access.ts";
+import { loadDefaultMaxResults } from "./settings.ts";
 import { collapseWhitespace } from "./html-to-md.ts";
-import { agentDir } from "./agent-dir.ts";
 import {
   autoTextSearch,
   EmptySweepError,
@@ -47,41 +45,7 @@ export interface WebSearchOptions {
   cwd?: string;
 }
 
-async function readMaxResultsFromFile(file: string): Promise<number | undefined> {
-  try {
-    const raw = await readFile(file, "utf-8");
-    const data = JSON.parse(raw) as {
-      unslothWebTools?: { maxResults?: unknown };
-      webSearch?: { maxResults?: unknown };
-      smartWebSearch?: { resultsPerQuery?: unknown };
-    };
-    const candidate =
-      data.unslothWebTools?.maxResults ??
-      data.webSearch?.maxResults ??
-      data.smartWebSearch?.resultsPerQuery;
-    if (typeof candidate !== "number" || !Number.isFinite(candidate)) return undefined;
-    return Math.floor(candidate);
-  } catch {
-    return undefined;
-  }
-}
-
-function clampMaxResults(value: number): number {
-  return Math.min(20, Math.max(1, value));
-}
-
-export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
-  let result = MAX_RESULTS;
-  const base = agentDir();
-  const globalFile = base ? join(base, "settings.json") : "";
-  const files = globalFile ? [globalFile] : [];
-  if (cwd) files.push(join(cwd, ".pi", "settings.json"));
-  for (const file of files) {
-    const configured = await readMaxResultsFromFile(file);
-    if (configured !== undefined) result = clampMaxResults(configured);
-  }
-  return result;
-}
+export { loadDefaultMaxResults };
 
 export async function webSearch(
   query: string | undefined,

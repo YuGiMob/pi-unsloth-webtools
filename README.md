@@ -51,7 +51,8 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   port 1–65535 is permitted; SSRF protection is enforced at the resolved-IP layer, not by port
   allowlists).
   Canonical public IPv4 literals are accepted like IPv6 literals; private literals are still
-  blocked at the resolved-IP layer.
+  blocked at the resolved-IP layer (non-canonical numeric encodings like `0x7f.0.0.1` /
+  `013.0.0.1` / `2130706433` are rejected by URL validation before DNS).
 - DNS resolution with SSRF protection: every resolved address is validated against
   private/loopback/link-local/CGNAT/documentation/multicast/reserved ranges, then the validated IP
   is pinned for the connection (custom `lookup` + SNI `servername`), so DNS cannot rebind between
@@ -64,7 +65,7 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   (`Accept: application/vnd.github.raw+json`), falling back to the raw README URL
   (`raw.githubusercontent.com`, no API rate limit) and then to the HTML page on failure.
   returning error-page content.
-- Up to 4 redirect hops, each re-validated and re-resolved against the same rules.
+- Up to 5 total requests (initial fetch + up to 4 HTTP redirects or `<meta http-equiv="refresh">` refreshes), each re-validated and re-resolved against the same rules.
 - 512 KiB download cap (10 MiB for PDFs), overall deadline + per-hop socket timeouts, abort-aware
   (`signal` cancels mid-flight). Fetches cut off by a download cap are marked with a trailing
   truncation notice, so a partial page is not mistaken for a complete one.
@@ -130,6 +131,50 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   requires a `vqd` token for DuckDuckGo, and exposes an `extract()` mode. This port
   deliberately pins the Studio snapshot — seven engines, bing disabled upstream, no vqd,
   no pagination — so engine behavior matches Studio rather than ddgs head.
+
+## When to use alternatives
+
+This package is intentionally a faithful, zero-dependency port of Studio's pipeline. Use it
+when you need deterministic, offline-friendly behavior with strong SSRF guarantees and test
+parity with `unsloth/studio`. For other tradeoffs, prefer:
+
+| Need | Use |
+|---|---|
+| Browser-like TLS/HTTP fingerprinting to unblock bot-defended pages | `pi-smart-fetch` (`wreq-js` `chrome_145`) |
+| Headless Chrome for JS-rendered SPAs/YouTube/Reddit threads | `georgebashi/pi-web-fetch` (puppeteer + trafilatura) |
+| Hosted search with semantic ranking and no scraping | `Brave Search API` / `Tavily` / `Exa` via `pi-ollama-web-search` |
+| Prompt-focused page distillation to save context | `pi-web-fetch` `prompt` -> sub-agent or Claude Code `WebFetch(url,prompt)` |
+| Batch fetching many URLs concurrently | `pi-smart-fetch` `batch_web_fetch` or call `web_fetch` in parallel |
+
+Mixing is supported: `pi install npm:pi-unsloth-webtools npm:pi-smart-fetch` lets the model
+choose the best tool per URL. No need to fork this package to add those features.
+
+## Configuration
+
+Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project overrides global):
+
+```json
+{
+  "unslothWebTools": {
+    "maxResults": 5,
+    "maxChars": 50000,
+    "timeoutMs": 60000
+  },
+  "webFetch": {
+    "maxChars": 50000,
+    "timeoutMs": 15000
+  }
+}
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `unslothWebTools.maxResults` | `5` | Default `maxResults` for `web_search` (clamped 1-20) |
+| `unslothWebTools.maxChars` / `webFetch.maxChars` / `smartFetchDefaultMaxChars` | tool param | Default `maxChars` for `web_fetch` and `web_search` url mode |
+| `unslothWebTools.timeoutMs` / `webFetch.timeoutMs` / `smartFetchDefaultTimeoutMs` | `60000` | Default `timeoutMs` (>=1000) |
+| `webSearch.maxResults` / `smartWebSearch.resultsPerQuery` | same as above | Legacy aliases for `maxResults` |
+
+Tool params always win over file defaults.
 
 ## Development
 

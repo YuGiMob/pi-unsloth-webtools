@@ -2,9 +2,20 @@ import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-
 import { Type } from "typebox";
 import { webSearch as defaultWebSearch } from "./web-search.ts";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchPageText as defaultFetchPageText } from "./web-fetch.ts";
+import { loadDefaultFetchSettings } from "./settings.ts";
 
 function positiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && value > 0 ? value : undefined;
+}
+async function fetchDefaults(cwd: string | undefined, params: { timeoutMs?: unknown; maxChars?: unknown }) {
+  const timeoutParam = positiveNumber(params.timeoutMs);
+  const maxCharsParam = positiveNumber(params.maxChars);
+  if (timeoutParam !== undefined && maxCharsParam !== undefined) return { timeoutMs: timeoutParam, maxChars: maxCharsParam };
+  const defaults = await loadDefaultFetchSettings(cwd);
+  return {
+    timeoutMs: timeoutParam ?? defaults.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+    maxChars: maxCharsParam ?? defaults.maxChars,
+  };
 }
 
 const WebSearchParams = Type.Object({
@@ -77,14 +88,16 @@ export function createWebTools(deps: WebToolsDeps = {}) {
         if (params.url?.trim()) {
           const url = params.url.trim();
           onUpdate?.({ content: [{ type: "text", text: `Fetching ${url}...` }], details: {} });
+          const cwd = (_ctx as ExtensionContext | undefined)?.cwd;
+          const { timeoutMs, maxChars } = await fetchDefaults(cwd, params);
           return {
             content: [
               {
                 type: "text",
                 text: await fetchPageText(url, {
-                  timeoutMs: positiveNumber(params.timeoutMs) ?? DEFAULT_FETCH_TIMEOUT_MS,
+                  timeoutMs,
                   signal: signal ?? undefined,
-                  maxChars: positiveNumber(params.maxChars),
+                  maxChars,
                 }),
               },
             ],
@@ -115,10 +128,12 @@ export function createWebTools(deps: WebToolsDeps = {}) {
       parameters: WebFetchParams,
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {
         onUpdate?.({ content: [{ type: "text", text: `Fetching ${params.url}...` }], details: {} });
+        const cwd = (_ctx as ExtensionContext | undefined)?.cwd;
+        const { timeoutMs, maxChars } = await fetchDefaults(cwd, params);
         const text = await fetchPageText(params.url, {
-          timeoutMs: positiveNumber(params.timeoutMs) ?? DEFAULT_FETCH_TIMEOUT_MS,
+          timeoutMs,
           signal: signal ?? undefined,
-          maxChars: positiveNumber(params.maxChars),
+          maxChars,
         });
         return { content: [{ type: "text", text }], details: {} };
       },

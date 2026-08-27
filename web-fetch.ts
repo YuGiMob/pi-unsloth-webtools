@@ -2,6 +2,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import type { LookupAllOptions } from "node:dns";
 import http from "node:http";
 import https from "node:https";
+
 import { createBrotliDecompress, createGunzip, createInflate, createInflateRaw } from "node:zlib";
 import type { IncomingMessage } from "node:http";
 import type { Transform } from "node:stream";
@@ -28,6 +29,7 @@ const META_VALUE_MAX_CHARS = 300;
 const MAX_PDF_FETCH_BYTES = 10 * 1024 * 1024;
 const MAX_REQUESTS = 5;
 export const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
+export { loadDefaultFetchMaxChars, loadDefaultFetchTimeoutMs, loadDefaultFetchSettings } from "./settings.ts";
 
 const UTF32_LE_BOM = Buffer.from([0xff, 0xfe, 0x00, 0x00]);
 const UTF32_BE_BOM = Buffer.from([0x00, 0x00, 0xfe, 0xff]);
@@ -375,6 +377,41 @@ function sniffMetaCharsetForHtml(bytes: Buffer, contentType: string): string | n
     if (!looksLikeHtmlDocument(probe)) return null;
   }
   return sniffMetaCharset(bytes);
+}
+function extractMetaRefresh(html: string): string | null {
+  let refresh: string | null = null;
+  const handle = (name: string, attrs: AttrDict) => {
+    if (refresh !== null) return;
+    if (name !== "meta") return;
+    const equiv = (attrs["http-equiv"] ?? "").toLowerCase();
+    if (equiv !== "refresh") return;
+    const content = attrs["content"] ?? "";
+    const match = /;\s*url\s*=\s*(.+)/i.exec(content);
+    if (!match) return;
+    let url = match[1].trim();
+    if ((url.startsWith('"') && url.endsWith('"')) || (url.startsWith("'") && url.endsWith("'"))) url = url.slice(1, -1);
+    url = url.trim();
+    if (url) refresh = url;
+  };
+  feedHtml(html, {
+    handleStartTag: handle,
+    handleStartEndTag: handle,
+    handleEndTag() {},
+    handleData() {},
+    handleEntityRef() {},
+    handleCharRef() {},
+  });
+  return refresh;
+}
+function metaRefreshUrl(html: string, base: string): string | null {
+  const target = extractMetaRefresh(html);
+  if (!target) return null;
+  try {
+    const next = new URL(target, base).toString();
+    return next !== base ? next : null;
+  } catch {
+    return null;
+  }
 }
 
 function decodeUtf32(bytes: Buffer, littleEndian: boolean): string {
@@ -859,7 +896,21 @@ export async function fetchUrlRaw(
         response.body,
         bomCodec ?? declaredCodec ?? sniffMetaCharsetForHtml(response.body, contentType) ?? "utf-8",
       ) + (response.truncated ? TRUNCATED_BODY_NOTICE : "");
-
+    const nextUrl = isHtmlContent(rawHtml, contentType) ? metaRefreshUrl(rawHtml, currentUrl) : null;
+    if (nextUrl) {
+      const [refreshAllowed, refreshReason, refreshHost] = checkUrlAccess(nextUrl, policy);
+      if (!refreshAllowed) return emptyResult(refreshReason);
+      const refreshBudget = budgetExceededResult(deadline, signal, now);
+      if (refreshBudget !== null) return refreshBudget;
+      const redirected = await resolveWithBudget(refreshHost);
+      if (!redirected.ok) return emptyResult(redirected.reason);
+      currentUrl = nextUrl;
+      pinnedIp = redirected.ip;
+      pinnedFamily = redirected.family;
+      alternates = redirected.alternates ?? [];
+      alternateIndex = 0;
+      continue;
+    }
     if (looksBinary(rawHtml)) {
       let alt: string | null = null;
       if (
@@ -1145,12 +1196,32 @@ export async function fetchPageText(
       }
     }
   }
-  const result = await rawFetch(url, rawFetchOptions);
+  const originalUrl = url;
+  let fetchUrl = url;
+  let result = await rawFetch(fetchUrl, rawFetchOptions);
+  for (let hop = 1; hop < MAX_REQUESTS; hop++) {
+    if (result.error !== null) break;
+    if (!isHtmlContent(result.body, result.contentType)) break;
+    const nextUrl = metaRefreshUrl(result.body, fetchUrl);
+    if (!nextUrl) break;
+    fetchUrl = nextUrl;
+    const [refreshAllowed, refreshReason] = checkUrlAccess(fetchUrl, policy);
+    if (!refreshAllowed) {
+      result = { error: refreshReason, body: "", contentType: "" };
+      break;
+    }
+    const refreshBudget = budgetExceededResult(deadlineMs, signal, now);
+    if (refreshBudget !== null) {
+      result = refreshBudget;
+      break;
+    }
+    result = await rawFetch(fetchUrl, rawFetchOptions);
+  }
   if (result.error !== null) {
     if (!result.error.startsWith("Blocked:")) {
       if (useCache) {
         try {
-          const cached = await getCached(url);
+          const cached = await getCached(originalUrl);
           if (cached) {
             let cachedOut = renderBody(cached.body, cached.contentType);
             if (!isFresh(cached, now())) cachedOut += staleNotice(cached);
@@ -1161,12 +1232,12 @@ export async function fetchPageText(
       }
       if (isHttp404Error(result.error)) {
         try {
-          const wb = await fetchWaybackSnapshot(url, rawFetch, rawFetchOptions, deadlineMs, now);
+          const wb = await fetchWaybackSnapshot(originalUrl, rawFetch, rawFetchOptions, deadlineMs, now);
           if (wb) {
             let out = renderBody(wb.body, wb.contentType);
             const ts = wb.timestamp ? `${wb.timestamp.slice(0, 4)}-${wb.timestamp.slice(4, 6)}-${wb.timestamp.slice(6, 8)}` : "unknown date";
-            out = `*Fetched from Wayback Machine snapshot (${ts}) for ${url}:*\n\n` + out;
-            await persistCache(url, wb.body, wb.contentType, useCache);
+            out = `*Fetched from Wayback Machine snapshot (${ts}) for ${originalUrl}:*\n\n` + out;
+            await persistCache(originalUrl, wb.body, wb.contentType, useCache);
             return truncatePageText(out, maxChars);
           }
         } catch {}
@@ -1175,6 +1246,6 @@ export async function fetchPageText(
     return result.error;
   }
   const finalOut = renderBody(result.body, result.contentType);
-  await persistCache(url, result.body, result.contentType, useCache);
+  await persistCache(originalUrl, result.body, result.contentType, useCache);
   return truncatePageText(finalOut, maxChars);
 }
