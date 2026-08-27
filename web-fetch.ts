@@ -7,6 +7,7 @@ import type { IncomingMessage } from "node:http";
 import type { Transform } from "node:stream";
 import {
   checkUrlAccess,
+  githubRawContentUrl,
   githubRepoRawReadmeUrl,
   githubRepoReadmeApiUrl,
   isPublicIp,
@@ -16,6 +17,7 @@ import {
 import { collapseWhitespace, decodeHtmlEntities, feedHtml, htmlToMarkdown } from "./html-to-md.ts";
 import type { AttrDict } from "./html-to-md.ts";
 import { INVALID_CHARREFS } from "./entities.ts";
+import { getCached, isFresh, setCached, staleNotice } from "./cache.ts";
 import { extractPdfText } from "./pdf.ts";
 import { randomUserAgent } from "./user-agents.ts";
 
@@ -498,8 +500,6 @@ async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promi
     alternates: addresses.slice(1).map((entry) => ({ ip: entry.address, family: entry.family })),
   };
 }
-
-
 function budgetExceededResult(
   deadline: number | null,
   signal: AbortSignal | undefined,
@@ -713,11 +713,9 @@ export async function fetchUrlRaw(
     if (resolveSignal.aborted) return { ...resolved, reason: FETCH_TIMEOUT_MESSAGE };
     return resolved;
   };
-
   url = normalizeUrlScheme(url);
   const [allowed, reason, hostname] = checkUrlAccess(url, policy);
   if (!allowed) return { error: reason, body: "", contentType: "" };
-
   const budgetResult = budgetExceededResult(deadline, signal, now);
   if (budgetResult !== null) return budgetResult;
   let resolved = await resolveWithBudget(hostname);
@@ -1041,7 +1039,62 @@ function formatReadmeBody(body: string): string {
   }
   return body;
 }
-
+function isHtmlContent(body: string, contentType: string): boolean {
+  return contentType.includes("html") || looksLikeHtml(body);
+}
+function renderBody(body: string, contentType: string): string {
+  return isHtmlContent(body, contentType) ? pagePrefixedMarkdown(body) : body.trim();
+}
+async function persistCache(url: string, body: string, contentType: string, useCache: boolean): Promise<void> {
+  if (!useCache) return;
+  try {
+    await setCached(url, body, contentType);
+  } catch {}
+}
+function isHttp404Error(error: string): boolean {
+  return /HTTP 404\b/.test(error);
+}
+async function fetchWaybackSnapshot(
+  url: string,
+  rawFetch: (url: string, options: RawFetchOptions) => Promise<RawFetchResult>,
+  options: RawFetchOptions,
+  deadlineMs: number,
+  now: () => number,
+): Promise<{ body: string; contentType: string; timestamp: string } | null> {
+  if (now() >= deadlineMs) return null;
+  const availUrl = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
+  let availResult: RawFetchResult | null = null;
+  try {
+    availResult = await rawFetch(availUrl, options);
+  } catch {
+    return null;
+  }
+  if (!availResult || availResult.error !== null) return null;
+  let snapshotUrl: string | null = null;
+  let timestamp = "";
+  try {
+    const data = JSON.parse(availResult.body) as {
+      archived_snapshots?: { closest?: { available?: boolean; url?: string; timestamp?: string; status?: string } };
+    };
+    const closest = data.archived_snapshots?.closest;
+    if (closest?.available && closest.url && closest.status === "200") {
+      snapshotUrl = closest.url;
+      timestamp = closest.timestamp ?? "";
+    }
+  } catch {
+    return null;
+  }
+  if (!snapshotUrl) return null;
+  if (now() >= deadlineMs) return null;
+  let snapResult: RawFetchResult | null = null;
+  try {
+    snapResult = await rawFetch(snapshotUrl, options);
+  } catch {
+    return null;
+  }
+  if (!snapResult || snapResult.error !== null) return null;
+  return { body: snapResult.body, contentType: snapResult.contentType, timestamp };
+}
 export async function fetchPageText(
   url: string,
   options: FetchPageOptions = {},
@@ -1053,7 +1106,6 @@ export async function fetchPageText(
   const policy = options.websitePolicy ?? null;
   const maxChars = options.maxChars;
   const rawFetch = options.rawFetch ?? fetchUrlRaw;
-
   url = normalizeUrlScheme(url);
   const [allowed, reason] = checkUrlAccess(url, policy);
   if (!allowed) return reason;
@@ -1065,7 +1117,16 @@ export async function fetchPageText(
     maxPdfBytes: options.maxPdfBytes,
     seams: options.seams,
   };
-
+  const useCache = !options.seams && !options.rawFetch;
+  const githubRaw = githubRawContentUrl(url);
+  if (githubRaw) {
+    const rawResult = await rawFetch(githubRaw, rawFetchOptions);
+    if (rawResult.error === null) {
+      const out = renderBody(rawResult.body, rawResult.contentType);
+      await persistCache(url, rawResult.body, rawResult.contentType, useCache);
+      return truncatePageText(out, maxChars);
+    }
+  }
   const readmeApiUrl = githubRepoReadmeApiUrl(url);
   if (readmeApiUrl) {
     const readmeResult = await rawFetch(readmeApiUrl, {
@@ -1077,29 +1138,51 @@ export async function fetchPageText(
     });
     const apiBody = readmeResult.error === null ? formatReadmeBody(readmeResult.body) : "";
     if (apiBody.trim()) {
-      return truncatePageText(
-        `README of ${url} (fetched via the GitHub README API):\n\n` + apiBody,
-        maxChars,
-      );
+      const rendered = `README of ${url} (fetched via the GitHub README API):\n\n` + apiBody;
+      await persistCache(url, rendered, "text/markdown", useCache);
+      return truncatePageText(rendered, maxChars);
     }
     const rawReadmeUrl = githubRepoRawReadmeUrl(url);
     if (rawReadmeUrl) {
       const rawResult = await rawFetch(rawReadmeUrl, rawFetchOptions);
       const rawBody = rawResult.error === null ? formatReadmeBody(rawResult.body) : "";
       if (rawBody.trim()) {
-        return truncatePageText(
-          `README of ${url} (fetched via the GitHub raw README URL):\n\n` + rawBody,
-          maxChars,
-        );
+        const rendered = `README of ${url} (fetched via the GitHub raw README URL):\n\n` + rawBody;
+        await persistCache(url, rendered, "text/markdown", useCache);
+        return truncatePageText(rendered, maxChars);
       }
     }
   }
-
   const result = await rawFetch(url, rawFetchOptions);
-  if (result.error !== null) return result.error;
-
-  const isHtml = result.contentType.includes("html") || looksLikeHtml(result.body);
-  if (!isHtml) return truncatePageText(result.body.trim(), maxChars);
-
-  return truncatePageText(pagePrefixedMarkdown(result.body), maxChars);
+  if (result.error !== null) {
+    if (!result.error.startsWith("Blocked:")) {
+      if (useCache) {
+        try {
+          const cached = await getCached(url);
+          if (cached) {
+            let cachedOut = renderBody(cached.body, cached.contentType);
+            if (!isFresh(cached, now())) cachedOut += staleNotice(cached);
+            else cachedOut += "\n\n*Served from cache — network fetch failed*";
+            return truncatePageText(cachedOut, maxChars);
+          }
+        } catch {}
+      }
+      if (isHttp404Error(result.error)) {
+        try {
+          const wb = await fetchWaybackSnapshot(url, rawFetch, rawFetchOptions, deadlineMs, now);
+          if (wb) {
+            let out = renderBody(wb.body, wb.contentType);
+            const ts = wb.timestamp ? `${wb.timestamp.slice(0, 4)}-${wb.timestamp.slice(4, 6)}-${wb.timestamp.slice(6, 8)}` : "unknown date";
+            out = `*Fetched from Wayback Machine snapshot (${ts}) for ${url}:*\n\n` + out;
+            await persistCache(url, wb.body, wb.contentType, useCache);
+            return truncatePageText(out, maxChars);
+          }
+        } catch {}
+      }
+    }
+    return result.error;
+  }
+  const finalOut = renderBody(result.body, result.contentType);
+  await persistCache(url, result.body, result.contentType, useCache);
+  return truncatePageText(finalOut, maxChars);
 }

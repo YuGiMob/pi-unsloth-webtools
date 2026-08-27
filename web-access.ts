@@ -323,7 +323,7 @@ const GITHUB_NON_OWNER_SEGMENTS = new Set([
 
 const GITHUB_NAME_RE = /^[A-Za-z0-9_.\-]{1,100}$/;
 
-function githubRepoOwnerRepo(url: string): [string, string] | null {
+function parseGithubRepo(url: string): { owner: string; repo: string; rest: string[] } | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -333,22 +333,33 @@ function githubRepoOwnerRepo(url: string): [string, string] | null {
   const host = (parsed.hostname ?? "").toLowerCase();
   if (host !== "github.com" && host !== "www.github.com") return null;
   const parts = parsed.pathname.split("/").filter((part) => part.length > 0);
-  if (parts.length !== 2) return null;
-  const [owner, repo] = parts;
+  if (parts.length < 2) return null;
+  const owner = parts[0];
+  const repoRaw = parts[1];
   if (GITHUB_NON_OWNER_SEGMENTS.has(owner.toLowerCase())) return null;
-  const cleanRepo = repo.endsWith(".git") ? repo.slice(0, -4) : repo;
-  if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(cleanRepo)) return null;
-  return [owner, cleanRepo];
+  const repo = repoRaw.endsWith(".git") ? repoRaw.slice(0, -4) : repoRaw;
+  if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(repo)) return null;
+  return { owner, repo, rest: parts.slice(2) };
 }
-
 export function githubRepoReadmeApiUrl(url: string): string | null {
-  const pair = githubRepoOwnerRepo(url);
-  return pair ? `https://api.github.com/repos/${pair[0]}/${pair[1]}/readme` : null;
+  const parsed = parseGithubRepo(url);
+  if (!parsed || parsed.rest.length !== 0) return null;
+  return `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/readme`;
 }
-
 export function githubRepoRawReadmeUrl(url: string): string | null {
-  const pair = githubRepoOwnerRepo(url);
-  return pair ? `https://raw.githubusercontent.com/${pair[0]}/${pair[1]}/HEAD/README.md` : null;
+  const parsed = parseGithubRepo(url);
+  if (!parsed || parsed.rest.length !== 0) return null;
+  return `https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/HEAD/README.md`;
+}
+export function githubRawContentUrl(url: string): string | null {
+  const parsed = parseGithubRepo(url);
+  if (!parsed || parsed.rest.length < 2) return null;
+  const [kind, ref] = parsed.rest;
+  if (kind !== "blob" && kind !== "raw") return null;
+  if (!ref) return null;
+  const filePath = parsed.rest.slice(2).join("/");
+  if (!filePath) return null;
+  return `https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/${ref}/${filePath}`;
 }
 
 function ipv4Octets(ip: string): number[] | null {

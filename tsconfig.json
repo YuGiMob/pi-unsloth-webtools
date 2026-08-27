@@ -26,6 +26,7 @@
     "entities.ts",
     "pdf.ts",
     "user-agents.ts",
+    "cache.ts",
     "test/**/*.ts"
   ]
 }
