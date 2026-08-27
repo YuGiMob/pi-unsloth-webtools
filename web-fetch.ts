@@ -768,18 +768,24 @@ export async function fetchUrlRaw(
   const resolveHost = seams.resolve ?? resolveAndValidate;
   const performRequest = seams.request ?? requestHop;
   const resolveWithBudget = async (hostname: string): Promise<ResolvedHost> => {
-    const deadlineSignal = AbortSignal.timeout(clampedRemainingMs(deadline, now));
-    const resolveSignal = signal ? AbortSignal.any([signal, deadlineSignal]) : deadlineSignal;
-    const resolved = await resolveHost(hostname, resolveSignal);
-    if (resolved.ok) return resolved;
-    if (signal?.aborted) return { ...resolved, reason: FETCH_CANCELLED_MESSAGE };
-    if (resolveSignal.aborted) return { ...resolved, reason: FETCH_TIMEOUT_MESSAGE };
-    return resolved;
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), clampedRemainingMs(deadline, now));
+    const resolveSignal = signal ? AbortSignal.any([signal, abortController.signal]) : abortController.signal;
+    try {
+      const resolved = await resolveHost(hostname, resolveSignal);
+      if (resolved.ok) return resolved;
+      if (signal?.aborted) return { ...resolved, reason: FETCH_CANCELLED_MESSAGE };
+      if (resolveSignal.aborted) return { ...resolved, reason: FETCH_TIMEOUT_MESSAGE };
+      return resolved;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   };
+  const checkBudget = (contentType = ""): RawFetchResult | null => budgetExceededResult(deadline, signal, now, contentType);
   url = normalizeUrlScheme(url);
   const [allowed, reason, hostname] = checkUrlAccess(url, policy);
   if (!allowed) return emptyResult(reason);
-  const budgetResult = budgetExceededResult(deadline, signal, now);
+  const budgetResult = checkBudget();
   if (budgetResult !== null) return budgetResult;
   let resolved = await resolveWithBudget(hostname);
   if (!resolved.ok) return emptyResult(resolved.reason);
@@ -791,7 +797,7 @@ export async function fetchUrlRaw(
   let alternateIndex = 0;
   const userAgent = randomUserAgent();
   for (let hop = 0; hop < MAX_REQUESTS; hop++) {
-    const budgetResult = budgetExceededResult(deadline, signal, now);
+    const budgetResult = checkBudget();
     if (budgetResult !== null) return budgetResult;
     const parsed = new URL(currentUrl);
     const hostHeader = parsed.hostname + (parsed.port ? `:${parsed.port}` : "");
@@ -859,7 +865,7 @@ export async function fetchUrlRaw(
       continue;
     }
 
-    const postBudgetResult = budgetExceededResult(deadline, signal, now);
+    const postBudgetResult = checkBudget();
     if (postBudgetResult !== null) return postBudgetResult;
 
     if (response.status >= 400) {
@@ -893,7 +899,7 @@ export async function fetchUrlRaw(
           contentType,
         );
       }
-      const budgetResult = budgetExceededResult(deadline, signal, now, contentType);
+      const budgetResult = checkBudget(contentType);
       if (budgetResult !== null) return budgetResult;
       if (!pdfText) pdfText = "(PDF contains no extractable text)";
       pdfText = withTruncation(pdfText, Boolean(response.truncated));
@@ -928,7 +934,7 @@ export async function fetchUrlRaw(
     if (nextUrl) {
       const [refreshAllowed, refreshReason, refreshHost] = checkUrlAccess(nextUrl, policy);
       if (!refreshAllowed) return emptyResult(refreshReason);
-      const refreshBudget = budgetExceededResult(deadline, signal, now);
+      const refreshBudget = checkBudget();
       if (refreshBudget !== null) return refreshBudget;
       const redirected = await resolveWithBudget(refreshHost);
       if (!redirected.ok) return emptyResult(redirected.reason);

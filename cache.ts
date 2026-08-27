@@ -34,6 +34,15 @@ async function secureChmod(path: string, mode: number): Promise<void> {
   } catch {}
 }
 
+async function unlinkSafe(path: string): Promise<boolean> {
+  try {
+    await unlink(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function ensureDir(): Promise<void> {
   const dir = cacheDir();
   try {
@@ -75,9 +84,7 @@ export async function setCached(url: string, body: string, contentType: string):
     await rename(tmpPath, path);
     await secureChmod(path, 0o600);
   } catch {
-    try {
-      await unlink(tmpPath);
-    } catch {}
+    await unlinkSafe(tmpPath);
     return;
   }
   await prune();
@@ -107,35 +114,31 @@ async function prune(): Promise<void> {
         if (entry && typeof entry.timestamp === "number" && Number.isFinite(entry.timestamp)) timestamp = entry.timestamp;
       } catch {}
       if (now - timestamp >= STALE_MAX_AGE_MS) {
-        try {
-          await unlink(full);
-        } catch {}
+        await unlinkSafe(full);
         continue;
       }
       entries.push({ file: full, size: s.size, timestamp });
       total += s.size;
     } catch {}
   }
-  const expired = entries.filter((e) => now - e.timestamp >= CACHE_TTL_MS);
+  const expired = entries.filter((e) => now - e.timestamp >= CACHE_TTL_MS).sort((a, b) => a.timestamp - b.timestamp);
   for (const e of expired) {
     if (entries.length <= MAX_ENTRIES && total <= MAX_BYTES) break;
-    try {
-      await unlink(e.file);
+    if (await unlinkSafe(e.file)) {
       total -= e.size;
       const idx = entries.indexOf(e);
       if (idx !== -1) entries.splice(idx, 1);
-    } catch {}
+    }
   }
   if (entries.length <= MAX_ENTRIES && total <= MAX_BYTES) return;
   entries.sort((a, b) => a.timestamp - b.timestamp);
   let idx = 0;
   while (idx < entries.length && (entries.length > MAX_ENTRIES || total > MAX_BYTES)) {
     const e = entries[idx];
-    try {
-      await unlink(e.file);
+    if (await unlinkSafe(e.file)) {
       total -= e.size;
       entries.splice(idx, 1);
-    } catch {
+    } else {
       idx++;
     }
   }

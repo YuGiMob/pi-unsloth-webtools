@@ -906,6 +906,14 @@ export async function autoTextSearch(
   const aggregator = new ResultsAggregator();
   const ctx: EngineContext = { region: "us-en", safesearch: "moderate" };
   const controller = new AbortController();
+  let onAbort: (() => void) | undefined;
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else {
+      onAbort = () => controller.abort();
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
   const timedOutProviders = new Set<string>();
   let cancelled = false;
   const uniqueProviders = new Set(engines.map((e) => e.provider)).size;
@@ -915,7 +923,10 @@ export async function autoTextSearch(
   const run = async (engine: Engine) => {
     let results: SearchResult[] | null = null;
     for (let attempt = 0; attempt < 2 && results === null; attempt++) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) {
+        if (signal?.aborted) cancelled = true;
+        return;
+      }
       const budgetLeft = deadline - Date.now();
       if (budgetLeft <= 0) return;
       if (attempt > 0 && budgetLeft < ENGINE_RETRY_BACKOFF_MS) return;
@@ -966,6 +977,7 @@ export async function autoTextSearch(
     }
   }
   await Promise.allSettled(pending);
+  if (onAbort && signal) signal.removeEventListener("abort", onAbort);
   if (cancelled) throw new SearchCancelled();
   const results = rankResults(aggregator.extractDicts(), query);
   if (results.length) {

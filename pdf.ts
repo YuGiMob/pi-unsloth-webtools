@@ -594,7 +594,7 @@ function assemblePages(
   pageLimitOverride?: boolean,
 ): string {
   const parts: string[] = [];
-  const pageLimitReached = pageLimitOverride ?? pages.length >= MAX_WEB_PDF_PAGES;
+  const pageLimitReached = pageLimitOverride ?? pages.length > MAX_WEB_PDF_PAGES;
   for (const page of pages) {
     const pageText = page.text.trim();
     if (!pageText) continue;

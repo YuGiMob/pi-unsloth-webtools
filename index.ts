@@ -5,7 +5,9 @@ import { DEFAULT_FETCH_TIMEOUT_MS, fetchPageText as defaultFetchPageText } from 
 import { loadDefaultFetchSettings } from "./settings.ts";
 
 function positiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && value > 0 ? value : undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const n = Math.floor(value);
+  return n > 0 ? n : undefined;
 }
 async function fetchDefaults(cwd: string | undefined, params: { timeoutMs?: unknown; maxChars?: unknown }) {
   const timeoutParam = positiveNumber(params.timeoutMs);

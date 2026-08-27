@@ -36,6 +36,24 @@ function pickNumber(data: Record<string, unknown>, paths: string[][]): number | 
 
 const MAX_RESULTS = 5;
 
+const MAX_RESULTS_PATHS: string[][] = [
+  ["unslothWebTools", "maxResults"],
+  ["webSearch", "maxResults"],
+  ["smartWebSearch", "resultsPerQuery"],
+];
+
+const FETCH_MAX_CHARS_PATHS: string[][] = [
+  ["unslothWebTools", "maxChars"],
+  ["webFetch", "maxChars"],
+  ["smartFetchDefaultMaxChars"],
+];
+
+const FETCH_TIMEOUT_PATHS: string[][] = [
+  ["unslothWebTools", "timeoutMs"],
+  ["webFetch", "timeoutMs"],
+  ["smartFetchDefaultTimeoutMs"],
+];
+
 function clampMaxResults(value: number): number {
   return Math.min(20, Math.max(1, value));
 }
@@ -60,11 +78,7 @@ async function settingsEntries(cwd?: string): Promise<Record<string, unknown>[]>
 export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
   let result = MAX_RESULTS;
   for (const data of await settingsEntries(cwd)) {
-    const candidate = pickNumber(data, [
-      ["unslothWebTools", "maxResults"],
-      ["webSearch", "maxResults"],
-      ["smartWebSearch", "resultsPerQuery"],
-    ]);
+    const candidate = pickNumber(data, MAX_RESULTS_PATHS);
     if (candidate !== undefined) result = clampMaxResults(candidate);
   }
   return result;
@@ -80,30 +94,21 @@ async function loadFetchSetting(cwd: string | undefined, paths: string[][], vali
 }
 
 export async function loadDefaultFetchMaxChars(cwd?: string): Promise<number | undefined> {
-  return loadFetchSetting(
-    cwd,
-    [["unslothWebTools", "maxChars"], ["webFetch", "maxChars"], ["smartFetchDefaultMaxChars"]],
-    (n) => n > 0,
-  );
+  return loadFetchSetting(cwd, FETCH_MAX_CHARS_PATHS, (n) => n > 0);
 }
 
 export async function loadDefaultFetchTimeoutMs(cwd?: string): Promise<number | undefined> {
-  return loadFetchSetting(
-    cwd,
-    [["unslothWebTools", "timeoutMs"], ["webFetch", "timeoutMs"], ["smartFetchDefaultTimeoutMs"]],
-    (n) => n >= 1000,
-  );
+  return loadFetchSetting(cwd, FETCH_TIMEOUT_PATHS, (n) => n >= 1000);
 }
 
 export async function loadDefaultFetchSettings(cwd?: string): Promise<{ maxChars?: number; timeoutMs?: number }> {
   let maxChars: number | undefined;
   let timeoutMs: number | undefined;
   for (const data of await settingsEntries(cwd)) {
-    const c = pickNumber(data, [["unslothWebTools", "maxChars"], ["webFetch", "maxChars"], ["smartFetchDefaultMaxChars"]]);
+    const c = pickNumber(data, FETCH_MAX_CHARS_PATHS);
     if (c !== undefined && c > 0) maxChars = c;
-    const t = pickNumber(data, [["unslothWebTools", "timeoutMs"], ["webFetch", "timeoutMs"], ["smartFetchDefaultTimeoutMs"]]);
+    const t = pickNumber(data, FETCH_TIMEOUT_PATHS);
     if (t !== undefined && t >= 1000) timeoutMs = t;
   }
   return { maxChars, timeoutMs };
 }
-
