@@ -28,6 +28,8 @@ const MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
 const META_VALUE_MAX_CHARS = 300;
 const MAX_PDF_FETCH_BYTES = 10 * 1024 * 1024;
 const MAX_REQUESTS = 5;
+const MAX_DNS_ATTEMPTS = 2;
+const DNS_RETRY_BACKOFF_MS = 250;
 export const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
 export { loadDefaultFetchMaxChars, loadDefaultFetchTimeoutMs, loadDefaultFetchSettings } from "./settings.ts";
 function remainingMs(deadline: number, now: () => number): number {
@@ -522,34 +524,73 @@ function decodeTis620(bytes: Buffer): string {
 }
 
 
+const TRANSIENT_DNS_ERROR_CODES = new Set([
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "ECONNREFUSED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+]);
+
+function isTransientDnsError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  return typeof code === "string" && TRANSIENT_DNS_ERROR_CODES.has(code);
+}
+
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+
 async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promise<ResolvedHost> {
-  let addresses: { address: string; family: number }[];
-  try {
-    const lookupOptions: LookupAllOptions & { signal?: AbortSignal } = {
-      all: true,
-      verbatim: true,
-      signal,
-    };
-    addresses = await dnsLookup(hostname, lookupOptions);
-  } catch (err) {
-    return { ok: false, reason: `Failed to resolve host: ${err}`, ip: "", family: 0 };
-  }
-  if (!addresses.length) {
-    return { ok: false, reason: `Failed to resolve host: no addresses for '${hostname}'`, ip: "", family: 0 };
-  }
-  for (const entry of addresses) {
-    if (!isPublicIp(entry.address)) {
-      return { ok: false, reason: `Blocked: refusing to fetch the non-public address ${entry.address}.`, ip: "", family: 0 };
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < MAX_DNS_ATTEMPTS; attempt++) {
+    if (signal?.aborted) break;
+    if (attempt > 0) {
+      await sleepAbortable(DNS_RETRY_BACKOFF_MS, signal);
+      if (signal?.aborted) break;
+    }
+    try {
+      const lookupOptions: LookupAllOptions & { signal?: AbortSignal } = {
+        all: true,
+        verbatim: true,
+        signal,
+      };
+      const addresses = await dnsLookup(hostname, lookupOptions);
+      if (!addresses.length) {
+        return { ok: false, reason: `Failed to resolve host: no addresses for '${hostname}'`, ip: "", family: 0 };
+      }
+      for (const entry of addresses) {
+        if (!isPublicIp(entry.address)) {
+          return { ok: false, reason: `Blocked: refusing to fetch the non-public address ${entry.address}.`, ip: "", family: 0 };
+        }
+      }
+      addresses.sort((a, b) => (a.family === 4 ? 0 : 1) - (b.family === 4 ? 0 : 1));
+      const first = addresses[0];
+      return {
+        ok: true,
+        reason: "",
+        ip: first.address,
+        family: first.family,
+        alternates: addresses.slice(1).map((entry) => ({ ip: entry.address, family: entry.family })),
+      };
+    } catch (err) {
+      lastError = err;
+      if (!isTransientDnsError(err)) break;
     }
   }
-  addresses.sort((a, b) => (a.family === 4 ? 0 : 1) - (b.family === 4 ? 0 : 1));
-  const first = addresses[0];
   return {
-    ok: true,
-    reason: "",
-    ip: first.address,
-    family: first.family,
-    alternates: addresses.slice(1).map((entry) => ({ ip: entry.address, family: entry.family })),
+    ok: false,
+    reason: lastError === null ? "Failed to resolve host: cancelled" : `Failed to resolve host: ${lastError}`,
+    ip: "",
+    family: 0,
   };
 }
 function budgetExceededResult(

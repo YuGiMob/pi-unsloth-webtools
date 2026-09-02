@@ -61,6 +61,9 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   When a host publishes both IPv4 and IPv6 addresses, IPv4 is preferred (broken IPv6 routes
   cannot stall a fetch), and a connection failure falls back to the next validated address for
   the same host before giving up.
+- Transient DNS failures (EAI_AGAIN, resolver timeouts, connection refusals) are retried once
+  with a short backoff inside the same deadline, so a brief resolver hiccup does not fail a
+  fetch; the deadline abort cuts a retry short when no budget remains.
 - GitHub repo root pages are rewritten to the unauthenticated README API
   (`Accept: application/vnd.github.raw+json`), falling back to the raw README URL
   (`raw.githubusercontent.com`, no API rate limit) and then to the HTML page on failure.

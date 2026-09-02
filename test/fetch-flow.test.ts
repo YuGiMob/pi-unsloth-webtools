@@ -464,6 +464,52 @@ describe("dns resolution budget", () => {
     expect(result.error).toBe("Failed to fetch URL: timed out.");
   });
 
+  it("retries a transient dns failure once", async () => {
+    dnsLookupMock.mockClear();
+    dnsLookupMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("getaddrinfo EAI_AGAIN example.com"), { code: "EAI_AGAIN" }),
+      )
+      .mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const result = await fetchUrlRaw("https://example.com/", {
+      seams: {
+        request: async () => ({ status: 200, headers: {}, body: Buffer.from("ok") }),
+      },
+    });
+    expect(result.error).toBeNull();
+    expect(result.body).toBe("ok");
+    expect(dnsLookupMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a non-transient dns failure", async () => {
+    dnsLookupMock.mockClear();
+    dnsLookupMock.mockRejectedValue(
+      Object.assign(new Error("getaddrinfo ENOTFOUND example.com"), { code: "ENOTFOUND" }),
+    );
+    const result = await fetchUrlRaw("https://example.com/", {
+      seams: {
+        request: async () => ({ status: 200, headers: {}, body: Buffer.from("x") }),
+      },
+    });
+    expect(result.error).toContain("ENOTFOUND");
+    expect(dnsLookupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops retrying when the deadline fires during the backoff", async () => {
+    dnsLookupMock.mockClear();
+    dnsLookupMock.mockRejectedValue(
+      Object.assign(new Error("getaddrinfo EAI_AGAIN example.com"), { code: "EAI_AGAIN" }),
+    );
+    const result = await fetchUrlRaw("https://example.com/", {
+      deadlineMs: Date.now() + 50,
+      seams: {
+        request: async () => ({ status: 200, headers: {}, body: Buffer.from("x") }),
+      },
+    });
+    expect(result.error).toBe("Failed to fetch URL: timed out.");
+    expect(dnsLookupMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not treat an oversized budget as an instant resolver timeout", async () => {
     dnsLookupMock.mockImplementation(
       () =>
