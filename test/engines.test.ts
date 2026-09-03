@@ -53,6 +53,12 @@ describe("canonicalizeHref", () => {
     expect(canonicalizeHref("https://x.com/a#section")).toBe("https://x.com/a");
   });
 
+  it("strips default ports", () => {
+    expect(canonicalizeHref("https://x.com:443/a")).toBe("https://x.com/a");
+    expect(canonicalizeHref("http://x.com:80/a")).toBe("http://x.com/a");
+    expect(canonicalizeHref("https://x.com:8443/a")).toBe("https://x.com:8443/a");
+  });
+
   it("keeps non-tracking parameters and paths", () => {
     expect(canonicalizeHref("https://x.com/a?page=2&sort=asc")).toBe("https://x.com/a?page=2&sort=asc");
     expect(canonicalizeHref("https://x.com/a/b?q=1")).toBe("https://x.com/a/b?q=1");

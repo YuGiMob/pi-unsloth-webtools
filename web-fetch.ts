@@ -631,8 +631,14 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
       headers: opts.headers,
       timeout: opts.inactivityMs,
       servername: url.protocol === "https:" ? url.hostname : undefined,
-      lookup: (_host, _opts, callback) =>
-        callback(null, [{ address: opts.pinnedIp, family: opts.family }]),
+      lookup: ((_hostname: string, _options: unknown, _callback: unknown) => {
+        const done = (typeof _options === "function" ? _options : _callback) as (err: unknown, address: unknown, family?: unknown) => void;
+        if ((_options as { all?: boolean } | undefined)?.all) {
+          done(null, [{ address: opts.pinnedIp, family: opts.family }]);
+        } else {
+          done(null, opts.pinnedIp, opts.family);
+        }
+      }) as typeof options.lookup,
     };
     let settled = false;
     let resRef: IncomingMessage | null = null;
@@ -798,7 +804,7 @@ export async function fetchUrlRaw(
   url: string,
   options: RawFetchOptions = {},
 ): Promise<RawFetchResult> {
-  const timeoutMs = options.timeoutMs ?? 30_000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
   const now = options.nowMs ?? Date.now;
   const deadline = options.deadlineMs ?? now() + timeoutMs;
   const signal = options.signal;

@@ -82,6 +82,9 @@ export function canonicalizeHref(href: string): string {
       }
     }
     url.hash = "";
+    if ((url.protocol === "http:" && url.port === "80") || (url.protocol === "https:" && url.port === "443")) {
+      url.port = "";
+    }
     return url.toString();
   } catch {
     return href;

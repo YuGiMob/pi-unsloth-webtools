@@ -11,7 +11,7 @@ import {
 
 export { EmptySweepError, SearchCancelled, SearchTimeoutError } from "./engines.ts";
 
-const SEARCH_TIMEOUT_MS = 300_000;
+export const SEARCH_TIMEOUT_MS = 300_000;
 const MAX_RESULTS = 5;
 
 export const EMPTY_SEARCH_RESULTS = [
@@ -56,7 +56,8 @@ export async function webSearch(
   const saneMax = Number.isFinite(rawMaxResults) ? Math.floor(rawMaxResults as number) : MAX_RESULTS;
   const maxResults = Math.min(20, Math.max(1, saneMax));
   const rawTimeout = options.timeoutMs ?? SEARCH_TIMEOUT_MS;
-  const timeoutMs = Number.isFinite(rawTimeout) ? (rawTimeout as number) : SEARCH_TIMEOUT_MS;
+  const flooredTimeout = Number.isFinite(rawTimeout) ? Math.floor(rawTimeout as number) : SEARCH_TIMEOUT_MS;
+  const timeoutMs = flooredTimeout >= 1 ? flooredTimeout : SEARCH_TIMEOUT_MS;
   const signal = options.signal;
   const policy = options.websitePolicy ?? null;
   const client = options.client ?? ddgSearch;

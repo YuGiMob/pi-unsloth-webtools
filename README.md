@@ -174,10 +174,13 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 |---|---|---|
 | `unslothWebTools.maxResults` | `5` | Default `maxResults` for `web_search` (clamped 1-20) |
 | `unslothWebTools.maxChars` / `webFetch.maxChars` / `smartFetchDefaultMaxChars` | tool param | Default `maxChars` for `web_fetch` and `web_search` url mode |
-| `unslothWebTools.timeoutMs` / `webFetch.timeoutMs` / `smartFetchDefaultTimeoutMs` | `60000` | Default `timeoutMs` (>=1000) |
+| `unslothWebTools.timeoutMs` / `webFetch.timeoutMs` / `smartFetchDefaultTimeoutMs` | `60000` fetch, `300000` search | Default `timeoutMs` when the tool param is absent (>=1000). Fetch and `web_search` url mode fall back to 60000; `web_search` query mode falls back to 300000 |
 | `webSearch.maxResults` / `smartWebSearch.resultsPerQuery` | same as above | Legacy aliases for `maxResults` |
+| `websitePolicy` | none | Not read from settings. Tools run unrestricted by default; `websitePolicy` is a programmatic option the host passes to `webSearch` / `fetchPageText` |
 
-Tool params always win over file defaults.
+Tool params always win over file defaults. Search dedup also strips default ports, so `https://example.com:443/a` and `https://example.com/a` collapse.
+
+Environment overrides: `PI_UNSLOTH_CACHE_DIR` changes the fetch cache directory, `PI_UNSLOTH_WEBTOOLS_STATS` opts into append-only sweep stats JSONL, `PI_CODING_AGENT_DIR` / `PI_AGENT_DIR` change the global settings directory. Cache entries live 1 hour and stale copies are served only after a network failure.
 
 ## Troubleshooting
 

@@ -1,8 +1,8 @@
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { webSearch as defaultWebSearch } from "./web-search.ts";
+import { SEARCH_TIMEOUT_MS, webSearch as defaultWebSearch } from "./web-search.ts";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchPageText as defaultFetchPageText } from "./web-fetch.ts";
-import { loadDefaultFetchSettings } from "./settings.ts";
+import { loadDefaultFetchSettings, loadDefaultFetchTimeoutMs } from "./settings.ts";
 
 function positiveNumber(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
@@ -107,11 +107,14 @@ export function createWebTools(deps: WebToolsDeps = {}) {
           };
         }
         onUpdate?.({ content: [{ type: "text", text: "Searching the web..." }], details: {} });
+        const timeoutParam = positiveNumber(params.timeoutMs);
+        const searchCwd = (_ctx as ExtensionContext | undefined)?.cwd;
+        const searchTimeoutMs = timeoutParam ?? (await loadDefaultFetchTimeoutMs(searchCwd)) ?? SEARCH_TIMEOUT_MS;
         const text = await webSearch(params.query, {
           signal: signal ?? undefined,
-          timeoutMs: positiveNumber(params.timeoutMs),
+          timeoutMs: searchTimeoutMs,
           maxResults: positiveNumber(params.maxResults),
-          cwd: (_ctx as ExtensionContext | undefined)?.cwd,
+          cwd: searchCwd,
         });
         return { content: [{ type: "text", text }], details: {} };
       },

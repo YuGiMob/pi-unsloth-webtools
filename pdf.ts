@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { inflateSync } from "node:zlib";
 
 export const MAX_WEB_PDF_PAGES = 50;
+const MAX_PDF_INFLATE_BYTES = 64 * 1024 * 1024;
 
 export class PdfParseError extends Error {
   constructor() {
@@ -786,7 +787,7 @@ async function extractPdfTextFallback(data: Buffer): Promise<string> {
     let bytes = raw;
     if (isFlate) {
       try {
-        bytes = inflateSync(raw);
+        bytes = inflateSync(raw, { maxOutputLength: MAX_PDF_INFLATE_BYTES });
       } catch {
         continue;
       }

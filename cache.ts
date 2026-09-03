@@ -98,9 +98,17 @@ async function prune(): Promise<void> {
   } catch {
     return;
   }
+  const now = Date.now();
+  const tmpFiles = files.filter((f) => f.includes(".tmp."));
+  for (const file of tmpFiles) {
+    try {
+      const full = join(dir, file);
+      const s = await stat(full);
+      if (now - s.mtimeMs >= CACHE_TTL_MS) await unlinkSafe(full);
+    } catch {}
+  }
   const jsonFiles = files.filter((f) => f.endsWith(".json"));
   if (!jsonFiles.length) return;
-  const now = Date.now();
   const entries: { file: string; size: number; timestamp: number }[] = [];
   let total = 0;
   for (const file of jsonFiles) {
