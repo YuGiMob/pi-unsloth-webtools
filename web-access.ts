@@ -381,6 +381,8 @@ function ipv4Octets(ip: string): number[] | null {
 }
 
 export function isPublicIp(ip: string): boolean {
+  if (ip.includes("%")) return false;
+  if (ip.includes(".") && ip.includes(":")) return false;
   if (ip.includes(".")) {
     const o = ipv4Octets(ip);
     if (!o) return false;

@@ -854,7 +854,13 @@ export async function fetchUrlRaw(
       Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
       "Accept-Encoding": "identity",
     };
-    if (options.extraHeaders) Object.assign(headers, options.extraHeaders);
+    if (options.extraHeaders) {
+      for (const [key, value] of Object.entries(options.extraHeaders)) {
+        if (key.toLowerCase() === "host") continue;
+        headers[key] = value;
+      }
+    }
+    headers["Host"] = hostHeader;
     const inactivity = remainingMs(deadline, now);
     let response: HopResponse;
     try {
@@ -1212,6 +1218,11 @@ async function fetchWaybackSnapshot(
     return null;
   }
   if (!snapshotUrl) return null;
+  const snapshotAccess = checkUrlAccess(snapshotUrl, options.websitePolicy ?? null);
+  if (!snapshotAccess[0]) return null;
+  const snapshotHost = snapshotAccess[2];
+  const snapshotIsIp = snapshotHost.includes(":") || /^\d+\.\d+\.\d+\.\d+$/.test(snapshotHost);
+  if (snapshotIsIp && !isPublicIp(snapshotHost)) return null;
   if (now() >= deadlineMs) return null;
   let snapResult: RawFetchResult | null = null;
   try {

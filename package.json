@@ -55,16 +55,22 @@
     "test:smoke": "vitest run test/smoke.test.ts",
     "typecheck": "tsc --noEmit",
     "check:package": "node -e \"const fs=require('fs');const pkg=require('./package.json');const listed=new Set(pkg.files);const bad=[];for(const f of pkg.files){if(!fs.existsSync(f))bad.push('missing file: '+f)}for(const f of fs.readdirSync('.').filter(f=>f.endsWith('.ts'))){if(!listed.has(f))bad.push('unlisted source: '+f)}if(bad.length){console.error(bad.join('\\n'));process.exit(1)}\"",
-    "prepublishOnly": "npm run typecheck && npm run test:unit && npm run check:package"
+    "prepublishOnly": "npm run typecheck && npm run test:unit && npm run check:package && npm run check:publint",
+    "lint": "oxlint .",
+    "check:publint": "publint",
+    "check:attw": "attw --pack"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.0",
     "@types/node": "^24.0.0",
     "typebox": "^1.3.7",
     "typescript": "~5.9.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "@arethetypeswrong/cli": "^0.18.5",
+    "oxlint": "^1.81.0",
+    "publint": "^0.3.24"
   },
-  "dependencies": {
+  "optionalDependencies": {
     "mupdf": "^1.28.0"
   }
 }

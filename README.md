@@ -179,6 +179,28 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 
 Tool params always win over file defaults.
 
+## Troubleshooting
+
+Match on the exact prefix. Do not retry blocked hosts with spelling tricks.
+
+| Symptom | Exact string | Action |
+|---|---|---|
+| Empty query | `No query provided.` | Pass `query` or `url`. |
+| Cancelled | `Search cancelled.` / `Failed to fetch URL: cancelled.` | Retry only if the abort was not intentional. |
+| Search timeout | `Search failed: the search engines (...) did not respond within N seconds.` | Retry, narrow the query, or raise `timeoutMs`. |
+| No results | `No results found.` | Rephrase the query. |
+| Policy filtered everything | `No results found within the website access limits.` | Widen `websitePolicy`, do not work around it. |
+| Blocked URL | `Blocked: ...` | Respect it. Includes non-http schemes, credentials, invalid hosts, non-public IPs, and policy denials. |
+| HTTP failure | `Failed to fetch URL: HTTP ...` | Fix the URL. A 404 automatically tries a Wayback snapshot. |
+| Non-text / binary | `(non-text content:` / `(binary content,` | Not readable as text by design. |
+| PDF without text | `(PDF contains no extractable text)` / `(PDF content could not be read as text...)` | Scanned or encrypted PDF. |
+| Download cap hit | `... (page truncated at the download limit)` | Raw fetch hit 512 KiB (10 MiB for PDFs). |
+| maxChars cut | `... (truncated, N chars total)` | Raise `maxChars` for the full text. |
+| Empty page | `(page returned no readable text)` | Page had no extractable text; JS-rendered pages need a browser tool. |
+| GitHub rewrite | `README of ... (fetched via the GitHub README API):` | Expected repo-root rewrite, not the HTML chrome. |
+| Cache fallback | `Served from cache` / `STALE cache from YYYY-MM-DD` | Network failed; output is the cached copy with its date. |
+| Wayback fallback | `Fetched from Wayback Machine snapshot (YYYY-MM-DD) for ...` | Original 404'd; output is the archived copy with its date. |
+
 ## Development
 
 ```sh

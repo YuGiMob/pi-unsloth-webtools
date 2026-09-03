@@ -954,9 +954,9 @@ export async function autoTextSearch(
   const timedOutProviders = new Set<string>();
   let cancelled = false;
   const uniqueProviders = new Set(engines.map((e) => e.provider)).size;
-  const maxWorkers = Math.min(uniqueProviders, Math.ceil(maxResults / 10) + 1);
+  const maxWorkers = Math.min(uniqueProviders, Math.max(4, Math.ceil(maxResults / 5) + 1));
   let i = 0;
-  let pending: Promise<void>[] = [];
+  const pending = new Set<Promise<void>>();
   const run = async (engine: Engine) => {
     let results: SearchResult[] | null = null;
     for (let attempt = 0; attempt < 2 && results === null; attempt++) {
@@ -1000,18 +1000,35 @@ export async function autoTextSearch(
       if (aggregator.size >= maxResults) controller.abort();
     }
   };
-  while (i < engines.length) {
+  while (i < engines.length || pending.size > 0) {
     if (aggregator.size >= maxResults || cancelled) {
       controller.abort();
       break;
     }
-    const engine = engines[i++];
-    if (seenProviders.has(engine.provider)) continue;
-    pending.push(run(engine));
-    if (pending.length >= maxWorkers) {
-      await Promise.allSettled(pending);
-      pending = [];
+    while (i < engines.length && pending.size < maxWorkers) {
+      if (aggregator.size >= maxResults || cancelled) {
+        controller.abort();
+        break;
+      }
+      const engine = engines[i++];
+      if (seenProviders.has(engine.provider)) continue;
+      const task = run(engine);
+      pending.add(task);
+      void task.then(
+        () => {
+          pending.delete(task);
+        },
+        () => {
+          pending.delete(task);
+        },
+      );
     }
+    if (pending.size === 0) break;
+    if (aggregator.size >= maxResults || cancelled) {
+      controller.abort();
+      break;
+    }
+    await Promise.race(pending);
   }
   await Promise.allSettled(pending);
   if (onAbort && signal) signal.removeEventListener("abort", onAbort);

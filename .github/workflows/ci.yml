@@ -29,8 +29,14 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Lint
+        run: npm run lint
+
       - name: Package check
         run: npm run check:package
+
+      - name: Publish check
+        run: npm run check:publint
 
       - name: Run unit tests
         run: npm run test:unit

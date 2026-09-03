@@ -443,7 +443,7 @@ describe("engine retry", () => {
       }),
     );
     await expect(autoTextSearch("cat", 5, 400)).rejects.toThrow(EmptySweepError);
-    expect(calls).toBe(4);
+    expect(calls).toBe(7);
   });
 });
 
