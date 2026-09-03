@@ -344,7 +344,7 @@ function findLink(links: LinkInfo[], span: SpanData): string | null {
     if (midX < link.x0 || midX > link.x1 || midY < link.y0 || midY > link.y1) continue;
     let uri = link.uri;
     for (const c of "()\n") {
-      uri = uri.replaceAll(c, "%0x" + c.charCodeAt(0).toString(16));
+      uri = uri.replaceAll(c, "%" + c.charCodeAt(0).toString(16).padStart(2, "0"));
     }
     return `[${span.text.trim()}](${uri})`;
   }

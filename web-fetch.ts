@@ -810,16 +810,22 @@ export async function fetchUrlRaw(
   const performRequest = seams.request ?? requestHop;
   const resolveWithBudget = async (hostname: string): Promise<ResolvedHost> => {
     const abortController = new AbortController();
-    const timeoutId = setTimeout(() => abortController.abort(), clampedRemainingMs(deadline, now));
+    const waitMs = clampedRemainingMs(deadline, now);
+    const timeoutId = setTimeout(() => abortController.abort(), waitMs);
     const resolveSignal = signal ? AbortSignal.any([signal, abortController.signal]) : abortController.signal;
+    let deadlineId: ReturnType<typeof setTimeout> | undefined;
+    const deadlinePromise = new Promise<ResolvedHost>((resolve) => {
+      deadlineId = setTimeout(() => resolve({ ok: false, reason: FETCH_TIMEOUT_MESSAGE, ip: "", family: 0 }), waitMs);
+    });
     try {
-      const resolved = await resolveHost(hostname, resolveSignal);
+      const resolved = await Promise.race([resolveHost(hostname, resolveSignal), deadlinePromise]);
       if (resolved.ok) return resolved;
       if (signal?.aborted) return { ...resolved, reason: FETCH_CANCELLED_MESSAGE };
       if (resolveSignal.aborted) return { ...resolved, reason: FETCH_TIMEOUT_MESSAGE };
       return resolved;
     } finally {
       clearTimeout(timeoutId);
+      if (deadlineId !== undefined) clearTimeout(deadlineId);
     }
   };
   const checkBudget = (contentType = ""): RawFetchResult | null => budgetExceededResult(deadline, signal, now, contentType);

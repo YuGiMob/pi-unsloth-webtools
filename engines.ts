@@ -216,6 +216,10 @@ function parsePredExpr(input: string): Pred {
       pos += "position()=last()".length;
       return { op: "last" };
     }
+    if (input.startsWith("last()", pos)) {
+      pos += "last()".length;
+      return { op: "last" };
+    }
     if (input.startsWith("contains(@class,", pos)) {
       pos += "contains(@class,".length;
       const value = quoted();
@@ -359,7 +363,38 @@ function matchesPred(pred: Pred, el: DomNode, index: number, total: number): boo
   }
 }
 
+function predContainsLast(pred: Pred): boolean {
+  switch (pred.op) {
+    case "last":
+      return true;
+    case "or":
+    case "and":
+      return predContainsLast(pred.a) || predContainsLast(pred.b);
+    case "child":
+      return pred.preds.some(predContainsLast);
+    default:
+      return false;
+  }
+}
+
 function applyStep(step: XStep, nodes: DomNode[]): DomNode[] {
+  if (step.preds.some(predContainsLast)) {
+    const out: DomNode[] = [];
+    const seen = new Set<DomNode>();
+    for (const node of nodes) {
+      const source = step.axis === "child" ? node.children : descendantsOf(node);
+      const list = source.filter((c) => !step.name || c.tag === step.name);
+      const total = list.length;
+      list.forEach((el, index) => {
+        if (seen.has(el)) return;
+        if (step.preds.every((p) => matchesPred(p, el, index, total))) {
+          seen.add(el);
+          out.push(el);
+        }
+      });
+    }
+    return out;
+  }
   const candidates: DomNode[] = [];
   for (const node of nodes) {
     const list = step.axis === "child" ? node.children : descendantsOf(node);
@@ -427,6 +462,7 @@ export function extractResults(
       if (!data) continue;
       result[key] = key === "href" ? normalizeUrl(data) : normalizeText(data);
     }
+    if (!result.title && !result.href && !result.body) continue;
     results.push(result);
   }
   return results;
@@ -445,8 +481,7 @@ function googleUserAgent(): string {
   return (
     `Mozilla/5.0 (Linux; Android ${androidVer}; ${device}) ` +
     `AppleWebKit/537.36 (KHTML, like Gecko) ` +
-    `Chrome/${chromeMajor}.0.${chromeBuild}.${chromePatch} Mobile Safari/537.36` +
-    "NSTNWV"
+    `Chrome/${chromeMajor}.0.${chromeBuild}.${chromePatch} Mobile Safari/537.36`
   );
 }
 
@@ -794,7 +829,9 @@ export class ResultsAggregator {
   }
 
   append(item: SearchResult): void {
+    if (typeof item.href !== "string" || !item.href.trim()) return;
     const key = canonicalizeHref(item.href);
+    if (!key) return;
     const existing = this.cache.get(key);
     if (!existing || item.body.length > existing.body.length) {
       this.cache.set(key, { ...item, href: key });

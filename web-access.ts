@@ -137,7 +137,7 @@ export function normalizeWebsitePolicy(value: unknown): WebsitePolicy {
   }
   const normalized: WebsitePolicy = { allowedDomains: [], blockedDomains: [] };
   for (const key of ["allowedDomains", "blockedDomains"] as const) {
-    const rawDomains = raw[key];
+    const rawDomains = raw[key] ?? [];
     if (!Array.isArray(rawDomains)) throw new Error(`${key} must be a list`);
     if (rawDomains.length > MAX_DOMAINS_PER_LIST) {
       throw new Error(`${key} supports at most ${MAX_DOMAINS_PER_LIST} domains`);
@@ -408,7 +408,7 @@ export function isPublicIp(ip: string): boolean {
   }
   if (canonical === "::1" || canonical.startsWith("::")) return false;
   if (canonical.startsWith("fc") || canonical.startsWith("fd")) return false;
-  if (/^fe[89ab][0-9a-f]:/.test(canonical)) return false;
+  if (/^fe[89a-f][0-9a-f]:/.test(canonical)) return false;
   if (canonical.startsWith("ff")) return false;
   if (canonical.startsWith("2001:db8")) return false;
   if (canonical.startsWith("64:ff9b:")) return false;

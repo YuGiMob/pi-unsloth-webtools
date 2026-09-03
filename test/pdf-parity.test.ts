@@ -158,7 +158,7 @@ describe("mupdf engine parity", () => {
     }
     out += `trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
     const text = await extractPdfText(Buffer.from(out, "latin1"));
-    expect(text).toContain("[Linked](https://example.com/a%0x28b%0x29c)");
+    expect(text).toContain("[Linked](https://example.com/a%28b%29c)");
   });
 
   it("detects and renders aligned tables", async () => {

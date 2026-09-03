@@ -23,15 +23,16 @@ export type SearchClient = (
   query: string,
   maxResults: number,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ) => Promise<SearchResult[]>;
-
 export async function ddgSearch(
   query: string,
   maxResults = MAX_RESULTS,
   signal?: AbortSignal,
+  timeoutMs = SEARCH_TIMEOUT_MS,
 ): Promise<SearchResult[]> {
   if (signal?.aborted) throw new SearchCancelled();
-  return autoTextSearch(query, maxResults, SEARCH_TIMEOUT_MS, signal);
+  return autoTextSearch(query, maxResults, timeoutMs, signal);
 }
 
 const POLICY_OVERFETCH = 4;
@@ -51,8 +52,11 @@ export async function webSearch(
   query: string | undefined,
   options: WebSearchOptions = {},
 ): Promise<string> {
-  const maxResults = options.maxResults ?? (await loadDefaultMaxResults(options.cwd));
-  const timeoutMs = options.timeoutMs ?? SEARCH_TIMEOUT_MS;
+  const rawMaxResults = options.maxResults ?? (await loadDefaultMaxResults(options.cwd));
+  const saneMax = Number.isFinite(rawMaxResults) ? Math.floor(rawMaxResults as number) : MAX_RESULTS;
+  const maxResults = Math.min(20, Math.max(1, saneMax));
+  const rawTimeout = options.timeoutMs ?? SEARCH_TIMEOUT_MS;
+  const timeoutMs = Number.isFinite(rawTimeout) ? (rawTimeout as number) : SEARCH_TIMEOUT_MS;
   const signal = options.signal;
   const policy = options.websitePolicy ?? null;
   const client = options.client ?? ddgSearch;
@@ -66,14 +70,15 @@ export async function webSearch(
         (policy?.blockedDomains?.length ?? 0) > 0,
     );
     const wanted = restricted ? maxResults * POLICY_OVERFETCH : maxResults;
-    const results = await client(effectiveQuery, wanted, signal);
+    const results = await client(effectiveQuery, wanted, signal, timeoutMs);
     if (signal?.aborted) return "Search cancelled.";
     if (!results.length) return EMPTY_SEARCH_RESULTS[0];
     const allowed: SearchResult[] = [];
     for (const result of results) {
       if (allowed.length >= maxResults) break;
       const href = String(result.href ?? "").trim();
-      if (href && !checkUrlAccess(href, policy)[0]) continue;
+      if (!href) continue;
+      if (!checkUrlAccess(href, policy)[0]) continue;
       allowed.push(result);
     }
     if (!allowed.length) return EMPTY_SEARCH_RESULTS[1];
