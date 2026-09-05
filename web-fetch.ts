@@ -2,6 +2,11 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import type { LookupAllOptions } from "node:dns";
 import http from "node:http";
 import https from "node:https";
+import { open } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { createBrotliDecompress, createGunzip, createInflate, createInflateRaw } from "node:zlib";
 import type { IncomingMessage } from "node:http";
@@ -171,6 +176,8 @@ export interface FetchPageOptions {
   maxChars?: number;
   maxBytes?: number;
   maxPdfBytes?: number;
+  allowPrivateAddresses?: boolean;
+  allowLocalFiles?: boolean;
   seams?: FetchSeams;
   rawFetch?: (url: string, options: RawFetchOptions) => Promise<RawFetchResult>;
 }
@@ -191,7 +198,7 @@ export interface ResolvedHost {
 }
 
 export interface FetchSeams {
-  resolve?: (hostname: string, signal?: AbortSignal) => Promise<ResolvedHost>;
+  resolve?: (hostname: string, signal?: AbortSignal, allowPrivateAddresses?: boolean) => Promise<ResolvedHost>;
   request?: (opts: HopOptions) => Promise<HopResponse>;
 }
 
@@ -217,6 +224,7 @@ export interface RawFetchOptions {
   websitePolicy?: WebsitePolicy | null;
   maxBytes?: number;
   maxPdfBytes?: number;
+  allowPrivateAddresses?: boolean;
   seams?: FetchSeams;
 }
 
@@ -549,7 +557,11 @@ function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promise<ResolvedHost> {
+async function resolveAndValidate(
+  hostname: string,
+  signal?: AbortSignal,
+  allowPrivateAddresses = false,
+): Promise<ResolvedHost> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt < MAX_DNS_ATTEMPTS; attempt++) {
     if (signal?.aborted) break;
@@ -568,7 +580,7 @@ async function resolveAndValidate(hostname: string, signal?: AbortSignal): Promi
         return { ok: false, reason: `Failed to resolve host: no addresses for '${hostname}'`, ip: "", family: 0 };
       }
       for (const entry of addresses) {
-        if (!isPublicIp(entry.address)) {
+        if (!allowPrivateAddresses && !isPublicIp(entry.address)) {
           return { ok: false, reason: `Blocked: refusing to fetch the non-public address ${entry.address}.`, ip: "", family: 0 };
         }
       }
@@ -813,6 +825,7 @@ export async function fetchUrlRaw(
   const maxPdfBytes = options.maxPdfBytes ?? MAX_PDF_FETCH_BYTES;
   const seams = options.seams ?? {};
   const resolveHost = seams.resolve ?? resolveAndValidate;
+  const allowPrivateAddresses = options.allowPrivateAddresses ?? false;
   const performRequest = seams.request ?? requestHop;
   const resolveWithBudget = async (hostname: string): Promise<ResolvedHost> => {
     const abortController = new AbortController();
@@ -824,7 +837,7 @@ export async function fetchUrlRaw(
       deadlineId = setTimeout(() => resolve({ ok: false, reason: FETCH_TIMEOUT_MESSAGE, ip: "", family: 0 }), waitMs);
     });
     try {
-      const resolved = await Promise.race([resolveHost(hostname, resolveSignal), deadlinePromise]);
+      const resolved = await Promise.race([resolveHost(hostname, resolveSignal, allowPrivateAddresses), deadlinePromise]);
       if (resolved.ok) return resolved;
       if (signal?.aborted) return { ...resolved, reason: FETCH_CANCELLED_MESSAGE };
       if (resolveSignal.aborted) return { ...resolved, reason: FETCH_TIMEOUT_MESSAGE };
@@ -853,7 +866,9 @@ export async function fetchUrlRaw(
     const budgetResult = checkBudget();
     if (budgetResult !== null) return budgetResult;
     const parsed = new URL(currentUrl);
-    const hostHeader = parsed.hostname + (parsed.port ? `:${parsed.port}` : "");
+    const hostHeader = parsed.hostname.includes(":")
+      ? `[${parsed.hostname}]${parsed.port ? `:${parsed.port}` : ""}`
+      : parsed.hostname + (parsed.port ? `:${parsed.port}` : "");
     const headers: Record<string, string> = {
       "User-Agent": userAgent,
       Host: hostHeader,
@@ -1239,6 +1254,74 @@ async function fetchWaybackSnapshot(
   if (!snapResult || snapResult.error !== null) return null;
   return { body: snapResult.body, contentType: snapResult.contentType, timestamp };
 }
+const WINDOWS_PATH_RE = /^[a-zA-Z]:[\\/]/;
+
+function parseLocalPath(url: string): string | null {
+  const trimmed = url.trim();
+  if (/^file:/i.test(trimmed)) {
+    try {
+      return fileURLToPath(trimmed);
+    } catch {
+      return "";
+    }
+  }
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) return join(homedir(), trimmed.slice(2));
+  if (WINDOWS_PATH_RE.test(trimmed) || trimmed.startsWith("/") || /^\.{1,2}\//.test(trimmed)) return trimmed;
+  return null;
+}
+
+function localFileFailure(err: unknown): string {
+  return `Failed to read file: ${err instanceof Error ? err.message : String(err)}`;
+}
+
+async function readLocalFile(
+  filePath: string,
+  options: { signal?: AbortSignal; maxChars?: number; maxBytes?: number; maxPdfBytes?: number },
+): Promise<string> {
+  if (options.signal?.aborted) return "Failed to read file: cancelled.";
+  let handle: FileHandle;
+  try {
+    handle = await open(filePath, "r");
+  } catch (err) {
+    return localFileFailure(err);
+  }
+  try {
+    const stats = await handle.stat();
+    if (stats.isDirectory()) return `Failed to read file: ${filePath} is a directory.`;
+    const maxBytes = options.maxBytes ?? MAX_FETCH_BYTES;
+    const maxPdfBytes = options.maxPdfBytes ?? MAX_PDF_FETCH_BYTES;
+    const length = Math.min(stats.size, Math.max(maxBytes, maxPdfBytes));
+    const buffer = Buffer.alloc(Number(length));
+    let read = 0;
+    while (read < length) {
+      const { bytesRead } = await handle.read(buffer, read, length - read, read);
+      if (!bytesRead) break;
+      read += bytesRead;
+    }
+    if (options.signal?.aborted) return "Failed to read file: cancelled.";
+    const head = read < length ? buffer.subarray(0, read) : buffer;
+    const isPdf = hasPdfMagic(head);
+    const limit = isPdf ? maxPdfBytes : maxBytes;
+    const truncated = stats.size > limit;
+    const body = head.length > limit ? head.subarray(0, limit) : head;
+    if (isPdf) {
+      let pdfText: string;
+      try {
+        pdfText = await extractPdfText(body);
+      } catch {
+        return withTruncation("(PDF content could not be read as text)", truncated);
+      }
+      if (!pdfText) pdfText = "(PDF contains no extractable text)";
+      return truncatePageText(withTruncation(pdfText, truncated), options.maxChars);
+    }
+    const text = decodeWithCodec(body, bomCodecFor(body) ?? "utf-8");
+    if (looksBinary(text)) return `(binary content, ${body.length} bytes; not readable as text)`;
+    return truncatePageText(withTruncation(renderBody(text, ""), truncated), options.maxChars);
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
 export async function fetchPageText(
   url: string,
   options: FetchPageOptions = {},
@@ -1250,6 +1333,18 @@ export async function fetchPageText(
   const policy = options.websitePolicy ?? null;
   const maxChars = options.maxChars;
   const rawFetch = options.rawFetch ?? fetchUrlRaw;
+  if (options.allowLocalFiles) {
+    const localPath = parseLocalPath(url);
+    if (localPath !== null) {
+      if (!localPath) return "Failed to read file: invalid file URL.";
+      return readLocalFile(localPath, {
+        signal,
+        maxChars,
+        maxBytes: options.maxBytes,
+        maxPdfBytes: options.maxPdfBytes,
+      });
+    }
+  }
   url = normalizeUrlScheme(url);
   const [allowed, reason] = checkUrlAccess(url, policy);
   if (!allowed) return reason;
@@ -1257,6 +1352,7 @@ export async function fetchPageText(
     deadlineMs,
     signal,
     websitePolicy: policy,
+    allowPrivateAddresses: options.allowPrivateAddresses,
     maxBytes: options.maxBytes,
     maxPdfBytes: options.maxPdfBytes,
     seams: options.seams,

@@ -34,6 +34,21 @@ function pickNumber(data: Record<string, unknown>, paths: string[][]): number | 
   return undefined;
 }
 
+function pickBoolean(data: Record<string, unknown>, paths: string[][]): boolean | undefined {
+  for (const path of paths) {
+    let cur: unknown = data;
+    for (const key of path) {
+      if (cur && typeof cur === "object" && !Array.isArray(cur)) cur = (cur as Record<string, unknown>)[key];
+      else {
+        cur = undefined;
+        break;
+      }
+    }
+    if (typeof cur === "boolean") return cur;
+  }
+  return undefined;
+}
+
 const MAX_RESULTS = 5;
 
 const MAX_RESULTS_PATHS: string[][] = [
@@ -52,6 +67,16 @@ const FETCH_TIMEOUT_PATHS: string[][] = [
   ["unslothWebTools", "timeoutMs"],
   ["webFetch", "timeoutMs"],
   ["smartFetchDefaultTimeoutMs"],
+];
+
+const ALLOW_PRIVATE_ADDRESSES_PATHS: string[][] = [
+  ["unslothWebTools", "allowPrivateAddresses"],
+  ["webFetch", "allowPrivateAddresses"],
+];
+
+const ALLOW_LOCAL_FILES_PATHS: string[][] = [
+  ["unslothWebTools", "allowLocalFiles"],
+  ["webFetch", "allowLocalFiles"],
 ];
 
 function clampMaxResults(value: number): number {
@@ -101,14 +126,25 @@ export async function loadDefaultFetchTimeoutMs(cwd?: string): Promise<number | 
   return loadFetchSetting(cwd, FETCH_TIMEOUT_PATHS, (n) => n >= 1000);
 }
 
-export async function loadDefaultFetchSettings(cwd?: string): Promise<{ maxChars?: number; timeoutMs?: number }> {
+export async function loadDefaultFetchSettings(cwd?: string): Promise<{
+  maxChars?: number;
+  timeoutMs?: number;
+  allowPrivateAddresses: boolean;
+  allowLocalFiles: boolean;
+}> {
   let maxChars: number | undefined;
   let timeoutMs: number | undefined;
+  let allowPrivateAddresses = false;
+  let allowLocalFiles = false;
   for (const data of await settingsEntries(cwd)) {
     const c = pickNumber(data, FETCH_MAX_CHARS_PATHS);
     if (c !== undefined && c > 0) maxChars = c;
     const t = pickNumber(data, FETCH_TIMEOUT_PATHS);
     if (t !== undefined && t >= 1000) timeoutMs = t;
+    const p = pickBoolean(data, ALLOW_PRIVATE_ADDRESSES_PATHS);
+    if (p !== undefined) allowPrivateAddresses = p;
+    const l = pickBoolean(data, ALLOW_LOCAL_FILES_PATHS);
+    if (l !== undefined) allowLocalFiles = l;
   }
-  return { maxChars, timeoutMs };
+  return { maxChars, timeoutMs, allowPrivateAddresses, allowLocalFiles };
 }

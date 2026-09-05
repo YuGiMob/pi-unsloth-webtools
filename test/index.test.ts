@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerExtension, { createWebTools } from "../index.ts";
 import type { FetchPageOptions } from "../web-fetch.ts";
@@ -97,5 +100,37 @@ describe("web_fetch tool", () => {
     );
     expect(result.content[0]).toMatchObject({ type: "text", text: "body" });
     expect(updates).toEqual(["Fetching https://example.com/..."]);
+  });
+
+  it("passes the local access settings to the fetch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-unsloth-idx-"));
+    const previousEnv = process.env.PI_CODING_AGENT_DIR;
+    try {
+      await mkdir(root, { recursive: true });
+      await writeFile(
+        join(root, "settings.json"),
+        JSON.stringify({ webFetch: { allowPrivateAddresses: true, allowLocalFiles: true } }),
+      );
+      process.env.PI_CODING_AGENT_DIR = root;
+      const fetchPageText = vi.fn(
+        async (_url: string, _options?: FetchPageOptions) => "body",
+      );
+      const { webFetchTool } = createWebTools({ fetchPageText });
+      await webFetchTool.execute(
+        "id",
+        { url: "https://example.com/" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      expect(fetchPageText).toHaveBeenCalledWith(
+        "https://example.com/",
+        expect.objectContaining({ allowPrivateAddresses: true, allowLocalFiles: true }),
+      );
+    } finally {
+      if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousEnv;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

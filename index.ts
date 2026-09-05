@@ -12,11 +12,12 @@ function positiveNumber(value: unknown): number | undefined {
 async function fetchDefaults(cwd: string | undefined, params: { timeoutMs?: unknown; maxChars?: unknown }) {
   const timeoutParam = positiveNumber(params.timeoutMs);
   const maxCharsParam = positiveNumber(params.maxChars);
-  if (timeoutParam !== undefined && maxCharsParam !== undefined) return { timeoutMs: timeoutParam, maxChars: maxCharsParam };
   const defaults = await loadDefaultFetchSettings(cwd);
   return {
     timeoutMs: timeoutParam ?? defaults.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
     maxChars: maxCharsParam ?? defaults.maxChars,
+    allowPrivateAddresses: defaults.allowPrivateAddresses,
+    allowLocalFiles: defaults.allowLocalFiles,
   };
 }
 
@@ -91,7 +92,7 @@ export function createWebTools(deps: WebToolsDeps = {}) {
           const url = params.url.trim();
           onUpdate?.({ content: [{ type: "text", text: `Fetching ${url}...` }], details: {} });
           const cwd = (_ctx as ExtensionContext | undefined)?.cwd;
-          const { timeoutMs, maxChars } = await fetchDefaults(cwd, params);
+          const { timeoutMs, maxChars, allowPrivateAddresses, allowLocalFiles } = await fetchDefaults(cwd, params);
           return {
             content: [
               {
@@ -100,6 +101,8 @@ export function createWebTools(deps: WebToolsDeps = {}) {
                   timeoutMs,
                   signal: signal ?? undefined,
                   maxChars,
+                  allowPrivateAddresses,
+                  allowLocalFiles,
                 }),
               },
             ],
@@ -127,18 +130,21 @@ export function createWebTools(deps: WebToolsDeps = {}) {
         "main-content heuristic: article/main scoping plus hidden-element and boilerplate " +
         "stripping. Non-HTML text is returned as-is. GitHub repo root pages are rewritten to the " +
         "README API, so the README is returned instead of the repo page's UI chrome. " +
-        "Private/loopback/link-local targets are blocked (SSRF protection), and the download size " +
-        "is capped.",
+        "Private/loopback/link-local targets are blocked (SSRF protection) unless webFetch.allowPrivateAddresses is " +
+        "enabled in settings, and reading local files (file:// URLs, absolute, ~/ or ./ paths, including PDFs) needs " +
+        "webFetch.allowLocalFiles. The download size is capped.",
       promptSnippet: "Fetch a web page and return readable text content",
       parameters: WebFetchParams,
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {
         onUpdate?.({ content: [{ type: "text", text: `Fetching ${params.url}...` }], details: {} });
         const cwd = (_ctx as ExtensionContext | undefined)?.cwd;
-        const { timeoutMs, maxChars } = await fetchDefaults(cwd, params);
+        const { timeoutMs, maxChars, allowPrivateAddresses, allowLocalFiles } = await fetchDefaults(cwd, params);
         const text = await fetchPageText(params.url, {
           timeoutMs,
           signal: signal ?? undefined,
           maxChars,
+          allowPrivateAddresses,
+          allowLocalFiles,
         });
         return { content: [{ type: "text", text }], details: {} };
       },

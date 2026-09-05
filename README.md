@@ -53,6 +53,11 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   Canonical public IPv4 literals are accepted like IPv6 literals; private literals are still
   blocked at the resolved-IP layer (non-canonical numeric encodings like `0x7f.0.0.1` /
   `013.0.0.1` / `2130706433` are rejected by URL validation before DNS).
+- Local opt-ins: setting `webFetch.allowPrivateAddresses` unlocks private/loopback/link-local
+  targets (localhost dev servers, LAN hosts); setting `webFetch.allowLocalFiles` lets `file://`
+  URLs, absolute, `~/`, and `./` paths be read from disk — local PDFs run the same MuPDF
+  extraction, local HTML gets the same Markdown conversion and metadata prefix, and the same
+  byte caps and truncation notices apply. Both default to off and are not tool parameters.
 - DNS resolution with SSRF protection: every resolved address is validated against
   private/loopback/link-local/CGNAT/documentation/multicast/reserved ranges, then the validated IP
   is pinned for the connection (custom `lookup` + SNI `servername`), so DNS cannot rebind between
@@ -177,6 +182,8 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `unslothWebTools.timeoutMs` / `webFetch.timeoutMs` / `smartFetchDefaultTimeoutMs` | `60000` fetch, `300000` search | Default `timeoutMs` when the tool param is absent (>=1000). Fetch and `web_search` url mode fall back to 60000; `web_search` query mode falls back to 300000 |
 | `webSearch.maxResults` / `smartWebSearch.resultsPerQuery` | same as above | Legacy aliases for `maxResults` |
 | `websitePolicy` | none | Not read from settings. Tools run unrestricted by default; `websitePolicy` is a programmatic option the host passes to `webSearch` / `fetchPageText` |
+| `unslothWebTools.allowPrivateAddresses` / `webFetch.allowPrivateAddresses` | `false` | Allow `web_fetch` and `web_search` url mode to reach private/loopback/link-local hosts (localhost dev servers, LAN IPs) |
+| `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `false` | Allow `web_fetch` and `web_search` url mode to read local files (`file://` URLs, absolute, `~/`, or `./` paths; PDFs are extracted, HTML converted) |
 
 Tool params always win over file defaults. Search dedup also strips default ports, so `https://example.com:443/a` and `https://example.com/a` collapse.
 
@@ -194,6 +201,9 @@ Match on the exact prefix. Do not retry blocked hosts with spelling tricks.
 | No results | `No results found.` | Rephrase the query. |
 | Policy filtered everything | `No results found within the website access limits.` | Widen `websitePolicy`, do not work around it. |
 | Blocked URL | `Blocked: ...` | Respect it. Includes non-http schemes, credentials, invalid hosts, non-public IPs, and policy denials. |
+| Private address blocked | `Blocked: refusing to fetch the non-public address ...` | Set `allowPrivateAddresses: true` for localhost/LAN targets and write the scheme explicitly (`http://localhost:3000`). |
+| Local file blocked | `Blocked: the URL has an invalid hostname or port.` for paths | Set `allowLocalFiles: true` and pass `file://`, absolute, `~/`, or `./` paths. |
+| File read failed | `Failed to read file: ...` | Check the path exists and is a regular file. |
 | HTTP failure | `Failed to fetch URL: HTTP ...` | Fix the URL. A 404 automatically tries a Wayback snapshot. |
 | Non-text / binary | `(non-text content:` / `(binary content,` | Not readable as text by design. |
 | PDF without text | `(PDF contains no extractable text)` / `(PDF content could not be read as text...)` | Scanned or encrypted PDF. |
