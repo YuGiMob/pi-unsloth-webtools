@@ -109,7 +109,7 @@ describe("web_fetch tool", () => {
       await mkdir(root, { recursive: true });
       await writeFile(
         join(root, "settings.json"),
-        JSON.stringify({ webFetch: { allowPrivateAddresses: true, allowLocalFiles: true } }),
+        JSON.stringify({ webFetch: { allowPrivateAddresses: false, allowLocalFiles: false } }),
       );
       process.env.PI_CODING_AGENT_DIR = root;
       const fetchPageText = vi.fn(
@@ -125,7 +125,7 @@ describe("web_fetch tool", () => {
       );
       expect(fetchPageText).toHaveBeenCalledWith(
         "https://example.com/",
-        expect.objectContaining({ allowPrivateAddresses: true, allowLocalFiles: true }),
+        expect.objectContaining({ allowPrivateAddresses: false, allowLocalFiles: false }),
       );
     } finally {
       if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;

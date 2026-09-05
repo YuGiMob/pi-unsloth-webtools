@@ -130,9 +130,9 @@ export function createWebTools(deps: WebToolsDeps = {}) {
         "main-content heuristic: article/main scoping plus hidden-element and boilerplate " +
         "stripping. Non-HTML text is returned as-is. GitHub repo root pages are rewritten to the " +
         "README API, so the README is returned instead of the repo page's UI chrome. " +
-        "Private/loopback/link-local targets are blocked (SSRF protection) unless webFetch.allowPrivateAddresses is " +
-        "enabled in settings, and reading local files (file:// URLs, absolute, ~/ or ./ paths, including PDFs) needs " +
-        "webFetch.allowLocalFiles. The download size is capped.",
+        "Private/loopback/link-local targets and local files (file:// URLs, absolute, ~/ or ./ paths, including " +
+        "PDFs) are supported by default; opt out with webFetch.allowPrivateAddresses: false or " +
+        "webFetch.allowLocalFiles: false in settings. The download size is capped.",
       promptSnippet: "Fetch a web page and return readable text content",
       parameters: WebFetchParams,
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {

@@ -825,7 +825,7 @@ export async function fetchUrlRaw(
   const maxPdfBytes = options.maxPdfBytes ?? MAX_PDF_FETCH_BYTES;
   const seams = options.seams ?? {};
   const resolveHost = seams.resolve ?? resolveAndValidate;
-  const allowPrivateAddresses = options.allowPrivateAddresses ?? false;
+  const allowPrivateAddresses = options.allowPrivateAddresses ?? true;
   const performRequest = seams.request ?? requestHop;
   const resolveWithBudget = async (hostname: string): Promise<ResolvedHost> => {
     const abortController = new AbortController();
@@ -1333,7 +1333,7 @@ export async function fetchPageText(
   const policy = options.websitePolicy ?? null;
   const maxChars = options.maxChars;
   const rawFetch = options.rawFetch ?? fetchUrlRaw;
-  if (options.allowLocalFiles) {
+  if (options.allowLocalFiles !== false) {
     const localPath = parseLocalPath(url);
     if (localPath !== null) {
       if (!localPath) return "Failed to read file: invalid file URL.";

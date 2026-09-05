@@ -134,8 +134,8 @@ export async function loadDefaultFetchSettings(cwd?: string): Promise<{
 }> {
   let maxChars: number | undefined;
   let timeoutMs: number | undefined;
-  let allowPrivateAddresses = false;
-  let allowLocalFiles = false;
+  let allowPrivateAddresses = true;
+  let allowLocalFiles = true;
   for (const data of await settingsEntries(cwd)) {
     const c = pickNumber(data, FETCH_MAX_CHARS_PATHS);
     if (c !== undefined && c > 0) maxChars = c;

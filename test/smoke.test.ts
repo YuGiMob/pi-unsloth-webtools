@@ -18,8 +18,8 @@ describe("live smoke", () => {
     expect(text.length).toBeGreaterThan(200);
   }, 60000);
 
-  it("blocks private addresses", async () => {
-    const text = await fetchPageText("http://127.0.0.1/", { timeoutMs: 10000 });
+  it("blocks private addresses when opted out", async () => {
+    const text = await fetchPageText("http://127.0.0.1/", { allowPrivateAddresses: false, timeoutMs: 10000 });
     expect(text).toContain("Blocked");
   });
 
@@ -72,8 +72,8 @@ describe("live smoke", () => {
     expect(healthy).toBeGreaterThanOrEqual(MIN_HEALTHY_ENGINES);
   }, 180_000);
 
-  it("rejects non-public resolution targets", async () => {
-    const result = await fetchUrlRaw("http://localhost/", { timeoutMs: 10000 });
+  it("rejects non-public resolution targets when opted out", async () => {
+    const result = await fetchUrlRaw("http://localhost/", { allowPrivateAddresses: false, timeoutMs: 10000 });
     expect(result.error).toContain("Blocked");
   });
 
