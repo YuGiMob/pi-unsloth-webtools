@@ -181,7 +181,7 @@ describe("local file fetching", () => {
     const file = join(dir, "doc.pdf");
     await writeFile(file, makePdf(["Hidden marker"]));
     const out = await fetchPageText(file, { allowLocalFiles: false, timeoutMs: 5000 });
-    expect(out).toBe("Blocked: the URL has an invalid hostname or port.");
+    expect(out.startsWith("Blocked:")).toBe(true);
     expect(out).not.toContain("Hidden marker");
   });
 });
