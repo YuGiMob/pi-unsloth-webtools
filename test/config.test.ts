@@ -107,7 +107,7 @@ describe("config corruption handling", () => {
 });
 
 describe("config location", () => {
-  it("honors XDG_CONFIG_HOME", async () => {
+  it.skipIf(process.platform === "win32")("honors XDG_CONFIG_HOME", async () => {
     await withTempConfig(async (dir) => {
       process.env.XDG_CONFIG_HOME = join(dir, "xdg");
       await writeConfig({ webRenderEnabled: false });
