@@ -1,8 +1,13 @@
 # pi-unsloth-webtools
 
 A [pi](https://github.com/earendil-works/pi-coding-agent) extension providing `web_search` and
-`web_fetch` tools, ported from the Unsloth Studio codebase
-([`unslothai/unsloth`](https://github.com/unslothai/unsloth), `studio/backend/core/inference/`).
+`web_fetch` tools. It began as a port of the Unsloth Studio codebase
+([`unslothai/unsloth`](https://github.com/unslothai/unsloth), `studio/backend/core/inference/`);
+the engine, extraction, and PDF layers are still derived from it, but the package is no longer
+behavior-identical to Studio — it enables local file and private-address fetching by default
+and adds a fetch cache, Wayback fallbacks, page metadata, and other behavior Studio does not
+have. See [Known differences from Studio](#known-differences-from-studio). The `unsloth` in the
+name marks provenance, not affiliation.
 
 ## Install
 
@@ -116,6 +121,11 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 
 ## Known differences from Studio
 
+- Local access: Studio validates every resolved address against non-public ranges and fetches
+  public web content only. This port permits private/loopback/link-local targets and local files
+  (`file://` URLs and absolute, `~/`, `./` paths) by default; opt out with
+  `webFetch.allowPrivateAddresses: false` and `webFetch.allowLocalFiles: false` to restore
+  Studio's behavior.
 - PDF styling: MuPDF.js exposes one font per line, so mixed-style lines style the
   whole line instead of per-span; superscript, subscript, underline, strikeout, and
   highlight markers are not emitted. Tables use a conservative text-grid detector:
@@ -147,9 +157,11 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 
 ## When to use alternatives
 
-This package is intentionally a faithful, zero-dependency port of Studio's pipeline. Use it
-when you need deterministic, offline-friendly behavior with strong SSRF guarantees and test
-parity with `unsloth/studio`. For other tradeoffs, prefer:
+This package keeps Studio's deterministic, zero-dependency pipeline and test parity with
+`unsloth/studio`, then layers local access and Studio-independent behavior on top. The SSRF
+guard is real and thoroughly tested, but it is opt-in: `allowPrivateAddresses` defaults to
+`true`, and local files are readable unless `allowLocalFiles` is `false`. For other tradeoffs,
+prefer:
 
 | Need | Use |
 |---|---|
