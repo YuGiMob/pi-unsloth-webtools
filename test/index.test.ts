@@ -7,6 +7,8 @@ import registerExtension, { createWebTools } from "../index.ts";
 import type { FetchPageOptions } from "../web-fetch.ts";
 import type { WebSearchOptions } from "../web-search.ts";
 import type { RenderPageOptions } from "../web-render.ts";
+import { readConfig, writeConfig } from "../config.ts";
+import { testTheme, waitFor, withTempConfig } from "./config-helpers.ts";
 
 function firstText(update: { content: { type: string; text?: string }[] }): string {
   return update.content[0]?.text ?? "";
@@ -16,14 +18,94 @@ function callText(component: { render(width: number): string[] } | undefined): s
   return component?.render(80).join("\n") ?? "";
 }
 
+interface Harness {
+  handlers: Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>;
+  commands: Map<string, { description?: string; handler: (args: string, ctx: unknown) => Promise<unknown> }>;
+  tools: string[];
+  active: () => string[];
+}
+
+function makeHarness(initialActive: string[]): Harness {
+  let active = [...initialActive];
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>();
+  const commands = new Map<
+    string,
+    { description?: string; handler: (args: string, ctx: unknown) => Promise<unknown> }
+  >();
+  const tools: string[] = [];
+  const pi = {
+    registerTool: (tool: { name: string }) => tools.push(tool.name),
+    registerCommand: (
+      name: string,
+      options: { description?: string; handler: (args: string, ctx: unknown) => Promise<unknown> }
+    ) => {
+      commands.set(name, options);
+    },
+    on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<unknown>) => {
+      handlers.set(name, handler);
+    },
+    getActiveTools: () => [...active],
+    setActiveTools: (names: string[]) => {
+      active = names;
+    },
+  } as unknown as ExtensionAPI;
+  registerExtension(pi);
+  return { handlers, commands, tools, active: () => active };
+}
+
 describe("extension registration", () => {
-  it("registers the web_search and web_fetch tools", () => {
-    const registered: { name: string }[] = [];
-    const pi = {
-      registerTool: (tool: { name: string }) => registered.push(tool),
-    } as unknown as ExtensionAPI;
-    registerExtension(pi);
-    expect(registered.map((tool) => tool.name)).toEqual(["web_search", "web_fetch", "web_render"]);
+  it("registers the web tools and the webtools-config command", () => {
+    const harness = makeHarness(["read", "web_render"]);
+    expect(harness.tools).toEqual(["web_search", "web_fetch", "web_render"]);
+    expect([...harness.commands.keys()]).toEqual(["webtools-config"]);
+    expect(harness.commands.get("webtools-config")?.description).toContain("web_render");
+  });
+});
+
+describe("web render config", () => {
+  it("deactivates web_render on session start when disabled", async () => {
+    await withTempConfig(async () => {
+      await writeConfig({ webRenderEnabled: false });
+      const harness = makeHarness(["read", "web_search", "web_fetch", "web_render"]);
+      await harness.handlers.get("session_start")?.({}, { hasUI: false });
+      expect(harness.active()).toEqual(["read", "web_search", "web_fetch"]);
+    });
+  });
+
+  it("keeps web_render active on session start when enabled", async () => {
+    await withTempConfig(async () => {
+      const harness = makeHarness(["read", "web_search", "web_fetch", "web_render"]);
+      await harness.handlers.get("session_start")?.({}, { hasUI: false });
+      expect(harness.active()).toEqual(["read", "web_search", "web_fetch", "web_render"]);
+    });
+  });
+
+  it("toggles web_render through the config command", async () => {
+    await withTempConfig(async () => {
+      const harness = makeHarness(["read", "web_search", "web_fetch", "web_render"]);
+      let overlay: { handleInput(data: string): void } | undefined;
+      const ctx = {
+        hasUI: true,
+        ui: {
+          notify: () => {},
+          custom: async (
+            factory: (tui: unknown, theme: Theme, keybindings: unknown, done: () => void) => Promise<unknown>
+          ) => {
+            overlay = (await factory({ requestRender: () => {} }, testTheme(), undefined, () => {})) as {
+              handleInput(data: string): void;
+            };
+          },
+        },
+      };
+      await harness.commands.get("webtools-config")?.handler("", ctx);
+      expect(overlay).toBeDefined();
+      overlay?.handleInput(" ");
+      await waitFor(async () => (await readConfig()).webRenderEnabled === false && !harness.active().includes("web_render"));
+      expect(harness.active()).not.toContain("web_render");
+      overlay?.handleInput(" ");
+      await waitFor(async () => (await readConfig()).webRenderEnabled === true && harness.active().includes("web_render"));
+      expect(harness.active()).toContain("web_render");
+    });
   });
 });
 

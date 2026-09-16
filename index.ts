@@ -5,6 +5,8 @@ import { SEARCH_TIMEOUT_MS, webSearch as defaultWebSearch } from "./web-search.t
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchPageText as defaultFetchPageText } from "./web-fetch.ts";
 import { renderPageText as defaultRenderPageText } from "./web-render.ts";
 import { loadDefaultFetchSettings, loadDefaultFetchTimeoutMs, loadJinaApiKey } from "./settings.ts";
+import { readConfigWithStatus, toggleWebRender } from "./config.ts";
+import { WebToolsConfigOverlay } from "./config-ui.ts";
 
 function toolCallLine(theme: Theme, name: string, detail: string) {
   const line = theme.fg("toolTitle", theme.bold(name)) + (detail ? ` ${theme.fg("accent", detail)}` : "");
@@ -223,4 +225,53 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool(webSearchTool);
   pi.registerTool(webFetchTool);
   pi.registerTool(webRenderTool);
+
+  pi.on("session_start", async (_event, ctx) => {
+    try {
+      const { config, corrupted } = await readConfigWithStatus();
+      if (corrupted && ctx.hasUI) {
+        ctx.ui.notify("Web tools config was corrupt and was reset to defaults", "warning");
+      }
+      if (!config.webRenderEnabled) {
+        pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "web_render"));
+      }
+    } catch (error) {
+      console.error("Failed to load web tools config:", error);
+    }
+  });
+
+  pi.registerCommand("webtools-config", {
+    description: "Open the web tools settings window (web_render on/off)",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) {
+        ctx.ui.notify("/webtools-config requires interactive mode", "error");
+        return;
+      }
+      await ctx.ui.custom<void>(
+        async (tui, theme, _keybindings, done) => {
+          const overlay = new WebToolsConfigOverlay({
+            tui,
+            theme,
+            done,
+            onToggle: async (key) => {
+              if (key !== "webRenderEnabled") return;
+              const enabled = await toggleWebRender();
+              const active = pi.getActiveTools();
+              pi.setActiveTools(
+                enabled
+                  ? [...new Set([...active, "web_render"])]
+                  : active.filter((name) => name !== "web_render"),
+              );
+            },
+          });
+          await overlay.load();
+          return overlay;
+        },
+        {
+          overlay: true,
+          overlayOptions: { anchor: "center", width: "90%", minWidth: 60, maxHeight: "90%" },
+        },
+      );
+    },
+  });
 }

@@ -18,6 +18,8 @@
   },
   "include": [
     "index.ts",
+    "config.ts",
+    "config-ui.ts",
     "web-search.ts",
     "web-fetch.ts",
     "web-render.ts",

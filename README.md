@@ -135,6 +135,8 @@ that need JavaScript to render:
   provenance line. An optional `maxChars` truncates, like `web_fetch`.
 - Keyless Reader requests are rate-limited per outgoing IP; see
   [Companion: rotating exit IPs](#companion-rotating-exit-ips).
+- Enabled by default. Disable it with `/webtools-config` (`webRenderEnabled` in
+  `~/.config/pi-unsloth-webtools/config.json`), which deactivates the tool for the session.
 
 ## Known differences from Studio
 
@@ -243,6 +245,25 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `unslothWebTools.allowPrivateAddresses` / `webFetch.allowPrivateAddresses` | `true` | Opt out to restore the resolved-IP SSRF guard: private/loopback/link-local hosts (localhost, LAN IPs) are refused again. Non-canonical numeric IP encodings stay blocked either way |
 | `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` and `web_search` url mode (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
 | `unslothWebTools.jinaApiKey` / `webRender.jinaApiKey` | none (`JINA_API_KEY` fallback) | API key for `web_render`'s Jina Reader; raises its rate limits. Settings keys win over the environment variable |
+
+### Settings window
+
+`/webtools-config` opens an interactive settings window (↑↓ navigate, space toggle, q close). Settings
+persist across sessions in `~/.config/pi-unsloth-webtools/config.json`, created when a setting is
+first changed:
+
+```json
+{
+  "webRenderEnabled": true
+}
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `webRenderEnabled` | `true` | When `false`, the `web_render` tool is deactivated for the session; `web_search` and `web_fetch` are unaffected |
+
+On non-Windows platforms the directory honors `XDG_CONFIG_HOME` when set (falling back to
+`~/.config`); on Windows it always uses `~/.config`.
 
 Tool params always win over file defaults. Search dedup also strips default ports, so `https://example.com:443/a` and `https://example.com/a` collapse.
 
