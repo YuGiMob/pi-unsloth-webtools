@@ -1,13 +1,14 @@
 # pi-unsloth-webtools
 
-A [pi](https://github.com/earendil-works/pi-coding-agent) extension providing `web_search` and
-`web_fetch` tools. It began as a port of the Unsloth Studio codebase
+A [pi](https://github.com/earendil-works/pi-coding-agent) extension providing `web_search`,
+`web_fetch`, and `web_render` tools. It began as a port of the Unsloth Studio codebase
 ([`unslothai/unsloth`](https://github.com/unslothai/unsloth), `studio/backend/core/inference/`);
 the engine, extraction, and PDF layers are still derived from it, but the package is no longer
 behavior-identical to Studio — it enables local file and private-address fetching by default
-and adds a fetch cache, Wayback fallbacks, page metadata, and other behavior Studio does not
-have. See [Known differences from Studio](#known-differences-from-studio). The `unsloth` in the
-name marks provenance, not affiliation.
+and adds a fetch cache, Wayback fallbacks, page metadata, a third-party rendering tool
+(`web_render`), and other behavior Studio does not have. See
+[Known differences from Studio](#known-differences-from-studio). The `unsloth` in the name marks
+provenance, not affiliation.
 
 ## Install
 
@@ -25,7 +26,7 @@ pi install /path/to/pi-unsloth-webtools
 
 ## What it does
 
-Both tools display their target in the TUI tool row: `web_search "query"`, `web_search <url>` in url mode, and `web_fetch <url>`.
+All three tools display their target in the TUI tool row: `web_search "query"`, `web_search <url>` in url mode, `web_fetch <url>`, and `web_render <url>`.
 
 ### web_search
 
@@ -119,6 +120,20 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   `application-name`) lines are added when declared, so the model can judge recency and
   provenance.
 
+### web_render
+
+Renders a public page to Markdown through the third-party Jina Reader (`r.jina.ai`) for pages
+that need JavaScript to render:
+
+- Every target is validated and resolved locally first: http/https only, and any private,
+  loopback, link-local, or otherwise non-public address is refused. Local files are refused on
+  this path regardless of `webFetch.allowPrivateAddresses` / `webFetch.allowLocalFiles`, because
+  the URL is sent to Jina.
+- `unslothWebTools.jinaApiKey` (or `webRender.jinaApiKey`, or the `JINA_API_KEY` environment
+  variable) raises the Reader's rate limits; without a key it still works at Jina's free limits.
+- Output is Markdown prefixed with `Title:` / `URL:` lines and a `Rendered via the Jina Reader`
+  provenance line. An optional `maxChars` truncates, like `web_fetch`.
+
 ## Known differences from Studio
 
 - Local access: Studio validates every resolved address against non-public ranges and fetches
@@ -126,6 +141,9 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   (`file://` URLs and absolute, `~/`, `./` paths) by default; opt out with
   `webFetch.allowPrivateAddresses: false` and `webFetch.allowLocalFiles: false` to restore
   Studio's behavior.
+- Third-party rendering: the extra `web_render` tool asks the Jina Reader (`r.jina.ai`) to fetch
+  the page, so the target URL leaves the machine. Studio has no third-party rendering path. This
+  path always refuses local files and non-public addresses, regardless of the local-access settings.
 - PDF styling: MuPDF.js exposes one font per line, so mixed-style lines style the
   whole line instead of per-span; superscript, subscript, underline, strikeout, and
   highlight markers are not emitted. Tables use a conservative text-grid detector:
@@ -158,15 +176,15 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 ## When to use alternatives
 
 This package keeps Studio's deterministic, zero-dependency pipeline and test parity with
-`unsloth/studio`, then layers local access and Studio-independent behavior on top. The SSRF
-guard is real and thoroughly tested, but it is opt-in: `allowPrivateAddresses` defaults to
-`true`, and local files are readable unless `allowLocalFiles` is `false`. For other tradeoffs,
-prefer:
+`unsloth/studio`, then layers local access, third-party rendering, and other Studio-independent
+behavior on top. The SSRF guard is real and thoroughly tested, but it is opt-in:
+`allowPrivateAddresses` defaults to `true`, and local files are readable unless `allowLocalFiles`
+is `false`. For other tradeoffs, prefer:
 
 | Need | Use |
 |---|---|
 | Browser-like TLS/HTTP fingerprinting to unblock bot-defended pages | `pi-smart-fetch` (`wreq-js` `chrome_145`) |
-| Headless Chrome for JS-rendered SPAs/YouTube/Reddit threads | `georgebashi/pi-web-fetch` (puppeteer + trafilatura) |
+| Headless Chrome for JS-rendered SPAs/YouTube/Reddit threads | Built-in `web_render` (Jina Reader) first; `georgebashi/pi-web-fetch` (puppeteer + trafilatura) when the Reader falls short |
 | Hosted search with semantic ranking and no scraping | `Brave Search API` / `Tavily` / `Exa` via `pi-ollama-web-search` |
 | Prompt-focused page distillation to save context | `pi-web-fetch` `prompt` -> sub-agent or Claude Code `WebFetch(url,prompt)` |
 | Batch fetching many URLs concurrently | `pi-smart-fetch` `batch_web_fetch` or call `web_fetch` in parallel |
@@ -201,10 +219,11 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `websitePolicy` | none | Not read from settings. Tools run unrestricted by default; `websitePolicy` is a programmatic option the host passes to `webSearch` / `fetchPageText` |
 | `unslothWebTools.allowPrivateAddresses` / `webFetch.allowPrivateAddresses` | `true` | Opt out to restore the resolved-IP SSRF guard: private/loopback/link-local hosts (localhost, LAN IPs) are refused again. Non-canonical numeric IP encodings stay blocked either way |
 | `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` and `web_search` url mode (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
+| `unslothWebTools.jinaApiKey` / `webRender.jinaApiKey` | none (`JINA_API_KEY` fallback) | API key for `web_render`'s Jina Reader; raises its rate limits. Settings keys win over the environment variable |
 
 Tool params always win over file defaults. Search dedup also strips default ports, so `https://example.com:443/a` and `https://example.com/a` collapse.
 
-Environment overrides: `PI_UNSLOTH_CACHE_DIR` changes the fetch cache directory, `PI_UNSLOTH_WEBTOOLS_STATS` opts into append-only sweep stats JSONL, `PI_CODING_AGENT_DIR` / `PI_AGENT_DIR` change the global settings directory. Cache entries live 1 hour and stale copies are served only after a network failure.
+Environment overrides: `PI_UNSLOTH_CACHE_DIR` changes the fetch cache directory, `PI_UNSLOTH_WEBTOOLS_STATS` opts into append-only sweep stats JSONL, `PI_CODING_AGENT_DIR` / `PI_AGENT_DIR` change the global settings directory, and `JINA_API_KEY` supplies the `web_render` key when no settings key is set. Cache entries live 1 hour and stale copies are served only after a network failure.
 
 ## Troubleshooting
 
@@ -226,7 +245,10 @@ Match on the exact prefix. Do not retry blocked hosts with spelling tricks.
 | PDF without text | `(PDF contains no extractable text)` / `(PDF content could not be read as text...)` | Scanned or encrypted PDF. |
 | Download cap hit | `... (page truncated at the download limit)` | Raw fetch hit 512 KiB (10 MiB for PDFs). |
 | maxChars cut | `... (truncated, N chars total)` | Raise `maxChars` for the full text. |
-| Empty page | `(page returned no readable text)` | Page had no extractable text; JS-rendered pages need a browser tool. |
+| Empty page | `(page returned no readable text)` | Page had no extractable text; try `web_render`, which renders JavaScript pages. |
+| Render blocked (local file) | `Blocked: web_render cannot fetch local files.` | Use `web_fetch`, which reads local files by default. |
+| Render blocked (private host) | `Blocked: refusing to fetch the non-public address ...` | `web_render` only reaches public hosts; use `web_fetch` for localhost/LAN. |
+| Render failure | `Failed to render URL: ...` | Jina rejected or failed the request (rate limit, bad key, unreachable page). Retry, or check `unslothWebTools.jinaApiKey` / `JINA_API_KEY`. |
 | GitHub rewrite | `README of ... (fetched via the GitHub README API):` | Expected repo-root rewrite, not the HTML chrome. |
 | Cache fallback | `Served from cache` / `STALE cache from YYYY-MM-DD` | Network failed; output is the cached copy with its date. |
 | Wayback fallback | `Fetched from Wayback Machine snapshot (YYYY-MM-DD) for ...` | Original 404'd; output is the archived copy with its date. |
@@ -267,6 +289,8 @@ The suite ports Unsloth Studio's own tests for these tools:
 - `test/smoke.test.ts`: live network checks against real hosts, including a per-engine
   result-health sweep (at least two engines must return well-formed results; engines
   that block or reset connections from datacenter IPs count as unhealthy, not failures)
+- `test/web-render.test.ts`: Jina Reader rendering with a stubbed fetch and DNS, the public-only
+  guard, policy enforcement, error mapping, truncation, cancellation, and API key precedence
 
 The seams (`seams.resolve` / `seams.request` / `rawFetch`) replace the network stack
 with fakes, mirroring how the Studio suite monkeypatches `_validate_and_resolve_host`

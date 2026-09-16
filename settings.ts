@@ -49,6 +49,21 @@ function pickBoolean(data: Record<string, unknown>, paths: string[][]): boolean 
   return undefined;
 }
 
+function pickString(data: Record<string, unknown>, paths: string[][]): string | undefined {
+  for (const path of paths) {
+    let cur: unknown = data;
+    for (const key of path) {
+      if (cur && typeof cur === "object" && !Array.isArray(cur)) cur = (cur as Record<string, unknown>)[key];
+      else {
+        cur = undefined;
+        break;
+      }
+    }
+    if (typeof cur === "string" && cur.trim()) return cur.trim();
+  }
+  return undefined;
+}
+
 const MAX_RESULTS = 5;
 
 const MAX_RESULTS_PATHS: string[][] = [
@@ -77,6 +92,11 @@ const ALLOW_PRIVATE_ADDRESSES_PATHS: string[][] = [
 const ALLOW_LOCAL_FILES_PATHS: string[][] = [
   ["unslothWebTools", "allowLocalFiles"],
   ["webFetch", "allowLocalFiles"],
+];
+
+const JINA_API_KEY_PATHS: string[][] = [
+  ["unslothWebTools", "jinaApiKey"],
+  ["webRender", "jinaApiKey"],
 ];
 
 function clampMaxResults(value: number): number {
@@ -147,4 +167,15 @@ export async function loadDefaultFetchSettings(cwd?: string): Promise<{
     if (l !== undefined) allowLocalFiles = l;
   }
   return { maxChars, timeoutMs, allowPrivateAddresses, allowLocalFiles };
+}
+
+export async function loadJinaApiKey(cwd?: string): Promise<string | undefined> {
+  let result: string | undefined;
+  for (const data of await settingsEntries(cwd)) {
+    const candidate = pickString(data, JINA_API_KEY_PATHS);
+    if (candidate !== undefined) result = candidate;
+  }
+  if (result !== undefined) return result;
+  const env = process.env.JINA_API_KEY?.trim();
+  return env ? env : undefined;
 }

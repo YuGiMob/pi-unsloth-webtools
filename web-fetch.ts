@@ -557,7 +557,7 @@ function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function resolveAndValidate(
+export async function resolveAndValidateHost(
   hostname: string,
   signal?: AbortSignal,
   allowPrivateAddresses = false,
@@ -824,7 +824,7 @@ export async function fetchUrlRaw(
   const maxBytes = options.maxBytes ?? MAX_FETCH_BYTES;
   const maxPdfBytes = options.maxPdfBytes ?? MAX_PDF_FETCH_BYTES;
   const seams = options.seams ?? {};
-  const resolveHost = seams.resolve ?? resolveAndValidate;
+  const resolveHost = seams.resolve ?? resolveAndValidateHost;
   const allowPrivateAddresses = options.allowPrivateAddresses ?? true;
   const performRequest = seams.request ?? requestHop;
   const resolveWithBudget = async (hostname: string): Promise<ResolvedHost> => {
@@ -1256,7 +1256,7 @@ async function fetchWaybackSnapshot(
 }
 const WINDOWS_PATH_RE = /^[a-zA-Z]:[\\/]/;
 
-function parseLocalPath(url: string): string | null {
+export function parseLocalPath(url: string): string | null {
   const trimmed = url.trim();
   if (/^file:/i.test(trimmed)) {
     try {

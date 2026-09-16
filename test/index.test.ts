@@ -6,6 +6,7 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import registerExtension, { createWebTools } from "../index.ts";
 import type { FetchPageOptions } from "../web-fetch.ts";
 import type { WebSearchOptions } from "../web-search.ts";
+import type { RenderPageOptions } from "../web-render.ts";
 
 function firstText(update: { content: { type: string; text?: string }[] }): string {
   return update.content[0]?.text ?? "";
@@ -22,7 +23,7 @@ describe("extension registration", () => {
       registerTool: (tool: { name: string }) => registered.push(tool),
     } as unknown as ExtensionAPI;
     registerExtension(pi);
-    expect(registered.map((tool) => tool.name)).toEqual(["web_search", "web_fetch"]);
+    expect(registered.map((tool) => tool.name)).toEqual(["web_search", "web_fetch", "web_render"]);
   });
 });
 
@@ -139,13 +140,54 @@ describe("web_fetch tool", () => {
   });
 });
 
+describe("web_render tool", () => {
+  it("renders the url with maxChars and timeoutMs and reports progress", async () => {
+    const renderPageText = vi.fn(async (_url: string, _options?: RenderPageOptions) => "rendered");
+    const { webRenderTool } = createWebTools({ renderPageText });
+    const updates: string[] = [];
+    const result = await webRenderTool.execute(
+      "id",
+      { url: "https://example.com/", maxChars: 50, timeoutMs: 3000 },
+      undefined,
+      (update) => updates.push(firstText(update)),
+      {} as never,
+    );
+    expect(renderPageText).toHaveBeenCalledWith(
+      "https://example.com/",
+      expect.objectContaining({ maxChars: 50, timeoutMs: 3000 }),
+    );
+    expect(result.content[0]).toMatchObject({ type: "text", text: "rendered" });
+    expect(updates).toEqual(["Rendering https://example.com/..."]);
+  });
+
+  it("reads the jina api key from settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-unsloth-render-"));
+    const previousEnv = process.env.PI_CODING_AGENT_DIR;
+    try {
+      await writeFile(join(root, "settings.json"), JSON.stringify({ unslothWebTools: { jinaApiKey: "secret" } }));
+      process.env.PI_CODING_AGENT_DIR = root;
+      const renderPageText = vi.fn(async (_url: string, _options?: RenderPageOptions) => "rendered");
+      const { webRenderTool } = createWebTools({ renderPageText });
+      await webRenderTool.execute("id", { url: "https://example.com/" }, undefined, undefined, {} as never);
+      expect(renderPageText).toHaveBeenCalledWith(
+        "https://example.com/",
+        expect.objectContaining({ apiKey: "secret" }),
+      );
+    } finally {
+      if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousEnv;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("tool call rendering", () => {
   const plainTheme = {
     fg: (_color: string, text: string) => text,
     bold: (text: string) => text,
   } as unknown as Theme;
 
-  const { webSearchTool, webFetchTool } = createWebTools();
+  const { webSearchTool, webFetchTool, webRenderTool } = createWebTools();
 
   it("shows the search query", () => {
     expect(callText(webSearchTool.renderCall?.({ query: "unsloth studio" }, plainTheme, {} as never))).toBe(
@@ -162,6 +204,12 @@ describe("tool call rendering", () => {
   it("shows the fetched url", () => {
     expect(callText(webFetchTool.renderCall?.({ url: "https://example.com/" }, plainTheme, {} as never))).toBe(
       "web_fetch https://example.com/",
+    );
+  });
+
+  it("shows the rendered url", () => {
+    expect(callText(webRenderTool.renderCall?.({ url: "https://example.com/" }, plainTheme, {} as never))).toBe(
+      "web_render https://example.com/",
     );
   });
 

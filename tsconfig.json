@@ -20,6 +20,7 @@
     "index.ts",
     "web-search.ts",
     "web-fetch.ts",
+    "web-render.ts",
     "web-access.ts",
     "html-to-md.ts",
     "engines.ts",

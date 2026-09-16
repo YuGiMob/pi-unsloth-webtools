@@ -3,7 +3,8 @@ import { Type } from "typebox";
 import { collapseWhitespace } from "./html-to-md.ts";
 import { SEARCH_TIMEOUT_MS, webSearch as defaultWebSearch } from "./web-search.ts";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchPageText as defaultFetchPageText } from "./web-fetch.ts";
-import { loadDefaultFetchSettings, loadDefaultFetchTimeoutMs } from "./settings.ts";
+import { renderPageText as defaultRenderPageText } from "./web-render.ts";
+import { loadDefaultFetchSettings, loadDefaultFetchTimeoutMs, loadJinaApiKey } from "./settings.ts";
 
 function toolCallLine(theme: Theme, name: string, detail: string) {
   const line = theme.fg("toolTitle", theme.bold(name)) + (detail ? ` ${theme.fg("accent", detail)}` : "");
@@ -77,14 +78,31 @@ const WebFetchParams = Type.Object({
   ),
 });
 
+const WebRenderParams = Type.Object({
+  url: Type.String({ description: "Public URL of the page to render" }),
+  maxChars: Type.Optional(
+    Type.Number({
+      description: "Truncate the returned content to this many characters (default: no limit)",
+    }),
+  ),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      minimum: 1000,
+      description: "Overall timeout in milliseconds (default: 60000)",
+    }),
+  ),
+});
+
 export interface WebToolsDeps {
   fetchPageText?: typeof defaultFetchPageText;
   webSearch?: typeof defaultWebSearch;
+  renderPageText?: typeof defaultRenderPageText;
 }
 
 export function createWebTools(deps: WebToolsDeps = {}) {
   const fetchPageText = deps.fetchPageText ?? defaultFetchPageText;
   const webSearch = deps.webSearch ?? defaultWebSearch;
+  const renderPageText = deps.renderPageText ?? defaultRenderPageText;
   return {
     webSearchTool: defineTool({
       name: "web_search",
@@ -167,11 +185,42 @@ export function createWebTools(deps: WebToolsDeps = {}) {
         return { content: [{ type: "text", text }], details: {} };
       },
     }),
+    webRenderTool: defineTool({
+      name: "web_render",
+      label: "Web Render",
+      description:
+        "Render a public web page to Markdown through the third-party Jina Reader (r.jina.ai). " +
+        "Use it for JavaScript-rendered pages that web_fetch cannot read. " +
+        "The target URL is sent to Jina; local files and non-public addresses are refused. " +
+        "An optional JINA_API_KEY or unslothWebTools.jinaApiKey raises the Reader's rate limits.",
+      promptSnippet: "Render a JavaScript-rendered page to Markdown via the Jina Reader",
+      promptGuidelines: [
+        'Use web_render when web_fetch reports "(page returned no readable text)" or the page only fills in through JavaScript.',
+      ],
+      parameters: WebRenderParams,
+      renderCall(args, theme) {
+        return toolCallLine(theme, "web_render", collapsedArg(args.url));
+      },
+      async execute(_toolCallId, params, signal, onUpdate, _ctx) {
+        onUpdate?.({ content: [{ type: "text", text: `Rendering ${params.url}...` }], details: {} });
+        const cwd = (_ctx as ExtensionContext | undefined)?.cwd;
+        const { timeoutMs, maxChars } = await fetchDefaults(cwd, params);
+        const apiKey = await loadJinaApiKey(cwd);
+        const text = await renderPageText(params.url, {
+          timeoutMs,
+          maxChars,
+          signal: signal ?? undefined,
+          apiKey,
+        });
+        return { content: [{ type: "text", text }], details: {} };
+      },
+    }),
   };
 }
 
 export default function (pi: ExtensionAPI) {
-  const { webSearchTool, webFetchTool } = createWebTools();
+  const { webSearchTool, webFetchTool, webRenderTool } = createWebTools();
   pi.registerTool(webSearchTool);
   pi.registerTool(webFetchTool);
+  pi.registerTool(webRenderTool);
 }

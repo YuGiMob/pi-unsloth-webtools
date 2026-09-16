@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { fetchPageText, fetchUrlRaw, hasPdfMagic } from "../web-fetch.ts";
 import { extractPdfText } from "../pdf.ts";
+import { renderPageText } from "../web-render.ts";
 import { EmptySweepError, SearchTimeoutError, ddgSearch } from "../web-search.ts";
 import { TEXT_ENGINES, type SearchResult } from "../engines.ts";
 import { deflateSync } from "node:zlib";
@@ -106,4 +107,14 @@ describe("live smoke", () => {
     expect(hasPdfMagic(pdf)).toBe(true);
     expect(hasPdfMagic(Buffer.from("hello world"))).toBe(false);
   });
+
+  it("renders a page through the Jina Reader", async () => {
+    const text = await renderPageText("https://example.com/", { timeoutMs: 60000 });
+    if (text.startsWith("Failed to render URL:") || text.startsWith("Blocked:")) {
+      console.warn(`jina reader unreachable from this network: ${text}`);
+      return;
+    }
+    expect(text).toContain("Example Domain");
+    expect(text).toContain("Rendered via the Jina Reader");
+  }, 90000);
 });
