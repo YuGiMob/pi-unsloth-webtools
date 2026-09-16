@@ -133,6 +133,8 @@ that need JavaScript to render:
   variable) raises the Reader's rate limits; without a key it still works at Jina's free limits.
 - Output is Markdown prefixed with `Title:` / `URL:` lines and a `Rendered via the Jina Reader`
   provenance line. An optional `maxChars` truncates, like `web_fetch`.
+- Keyless Reader requests are rate-limited per outgoing IP; see
+  [Companion: rotating exit IPs](#companion-rotating-exit-ips).
 
 ## Known differences from Studio
 
@@ -163,8 +165,10 @@ that need JavaScript to render:
   generic engine failures. The timeout budget bounds the entire sweep: per-engine
   timeouts shrink as the budget is consumed, so the reported timeout matches the
   worst-case wall time.
-- Proxies: Studio routes through environment proxies; this port always connects
-  directly with DNS pinning (deliberately out of scope).
+- Proxies: Studio routes through environment proxies; this port's direct fetch always connects
+  directly with DNS pinning (deliberately out of scope). The search and `web_render` paths use the
+  process-wide `fetch`, so an agent-level proxy dispatcher does apply to them — see
+  [Companion: rotating exit IPs](#companion-rotating-exit-ips).
 - Dedup and titles: the aggregator keys on canonicalized hrefs (`utm_*`/tracking parameters
   and fragments stripped, then the URL re-serialized); fetched HTML pages are prefixed with
   the document `<title>`. Studio keys on raw hrefs and returns the converted body alone.
@@ -191,6 +195,25 @@ is `false`. For other tradeoffs, prefer:
 
 Mixing is supported: `pi install npm:pi-unsloth-webtools npm:pi-smart-fetch` lets the model
 choose the best tool per URL. No need to fork this package to add those features.
+
+## Companion: rotating exit IPs
+
+[`pi-tor-proxy`](https://github.com/YuGiMob/pi-tor-proxy) routes pi's in-process `fetch` traffic
+through Tor (it downloads and manages its own Tor binary) and gives each pi instance its own
+circuit and exit IP. The search sweep and `web_render` both use `fetch`, so they leave through
+the current Tor exit, and Jina rate-limits keyless Reader requests per outgoing IP —
+`/tor-cycle` swaps the exit those limits are counted against, while `/tor-country` and
+`/tor-exclude` constrain which exits are used.
+
+```sh
+pi install npm:pi-unsloth-webtools npm:pi-tor-proxy
+```
+
+`web_fetch` is not routed: it connects directly through `node:http`/`node:https` with a pinned,
+validated IP and ignores the proxy variables (see the proxy note under Known differences).
+Caveats: Tor mode supports Linux and macOS only, adds latency, and many search engines and
+Cloudflare-fronted services challenge or block Tor exits, so cycling helps with per-IP limits but
+is not a guarantee.
 
 ## Configuration
 
