@@ -2,13 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import registerExtension, { createWebTools } from "../index.ts";
 import type { FetchPageOptions } from "../web-fetch.ts";
 import type { WebSearchOptions } from "../web-search.ts";
 
 function firstText(update: { content: { type: string; text?: string }[] }): string {
   return update.content[0]?.text ?? "";
+}
+
+function callText(component: { render(width: number): string[] } | undefined): string {
+  return component?.render(80).join("\n") ?? "";
 }
 
 describe("extension registration", () => {
@@ -132,5 +136,53 @@ describe("web_fetch tool", () => {
       else process.env.PI_CODING_AGENT_DIR = previousEnv;
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("tool call rendering", () => {
+  const plainTheme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as unknown as Theme;
+
+  const { webSearchTool, webFetchTool } = createWebTools();
+
+  it("shows the search query", () => {
+    expect(callText(webSearchTool.renderCall?.({ query: "unsloth studio" }, plainTheme, {} as never))).toBe(
+      'web_search "unsloth studio"',
+    );
+  });
+
+  it("shows the target url in web_search url mode", () => {
+    expect(callText(webSearchTool.renderCall?.({ url: "https://example.com/doc" }, plainTheme, {} as never))).toBe(
+      "web_search https://example.com/doc",
+    );
+  });
+
+  it("shows the fetched url", () => {
+    expect(callText(webFetchTool.renderCall?.({ url: "https://example.com/" }, plainTheme, {} as never))).toBe(
+      "web_fetch https://example.com/",
+    );
+  });
+
+  it("collapses whitespace in the rendered target", () => {
+    expect(callText(webFetchTool.renderCall?.({ url: "https://example.com/a\n  b" }, plainTheme, {} as never))).toBe(
+      "web_fetch https://example.com/a b",
+    );
+  });
+
+  it("styles the tool name and target", () => {
+    const theme = {
+      fg: (color: string, text: string) => `[${color}]${text}[/${color}]`,
+      bold: (text: string) => `**${text}**`,
+    } as unknown as Theme;
+    expect(callText(webSearchTool.renderCall?.({ query: "cats" }, theme, {} as never))).toBe(
+      '[toolTitle]**web_search**[/toolTitle] [accent]"cats"[/accent]',
+    );
+  });
+
+  it("falls back to the bare tool name without arguments", () => {
+    expect(callText(webSearchTool.renderCall?.({}, plainTheme, {} as never))).toBe("web_search");
+    expect(callText(webFetchTool.renderCall?.({ url: "" }, plainTheme, {} as never))).toBe("web_fetch");
   });
 });

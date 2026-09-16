@@ -20,6 +20,8 @@ pi install /path/to/pi-unsloth-webtools
 
 ## What it does
 
+Both tools display their target in the TUI tool row: `web_search "query"`, `web_search <url>` in url mode, and `web_fetch <url>`.
+
 ### web_search
 
 Mirrors Unsloth Studio's `web_search` tool:

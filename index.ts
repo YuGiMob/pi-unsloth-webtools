@@ -1,8 +1,18 @@
-import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { collapseWhitespace } from "./html-to-md.ts";
 import { SEARCH_TIMEOUT_MS, webSearch as defaultWebSearch } from "./web-search.ts";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchPageText as defaultFetchPageText } from "./web-fetch.ts";
 import { loadDefaultFetchSettings, loadDefaultFetchTimeoutMs } from "./settings.ts";
+
+function toolCallLine(theme: Theme, name: string, detail: string) {
+  const line = theme.fg("toolTitle", theme.bold(name)) + (detail ? ` ${theme.fg("accent", detail)}` : "");
+  return { render: () => [line], invalidate: () => {} };
+}
+
+function collapsedArg(value: unknown): string {
+  return collapseWhitespace(typeof value === "string" ? value : "");
+}
 
 function positiveNumber(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
@@ -87,6 +97,11 @@ export function createWebTools(deps: WebToolsDeps = {}) {
         'Use web_search with the url parameter (e.g. {"url": "<URL>"}) to read the full text of a page found in search results.',
       ],
       parameters: WebSearchParams,
+      renderCall(args, theme) {
+        const url = collapsedArg(args.url);
+        const query = collapsedArg(args.query);
+        return toolCallLine(theme, "web_search", url || (query ? `"${query}"` : ""));
+      },
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {
         if (params.url?.trim()) {
           const url = params.url.trim();
@@ -135,6 +150,9 @@ export function createWebTools(deps: WebToolsDeps = {}) {
         "webFetch.allowLocalFiles: false in settings. The download size is capped.",
       promptSnippet: "Fetch a web page and return readable text content",
       parameters: WebFetchParams,
+      renderCall(args, theme) {
+        return toolCallLine(theme, "web_fetch", collapsedArg(args.url));
+      },
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {
         onUpdate?.({ content: [{ type: "text", text: `Fetching ${params.url}...` }], details: {} });
         const cwd = (_ctx as ExtensionContext | undefined)?.cwd;
