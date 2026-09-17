@@ -6,7 +6,7 @@ import { SEARCH_TIMEOUT_MS, webSearch as defaultWebSearch } from "./web-search.t
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchPageText as defaultFetchPageText } from "./web-fetch.ts";
 import { renderPageText as defaultRenderPageText } from "./web-render.ts";
 import { loadDefaultFetchSettings, loadDefaultFetchTimeoutMs, loadJinaApiKey } from "./settings.ts";
-import { readConfigWithStatus, toggleWebRender } from "./config.ts";
+import { readConfig, readConfigWithStatus, toggleWebRender } from "./config.ts";
 import { WebToolsConfigOverlay } from "./config-ui.ts";
 
 function toolCallLine(theme: Theme, name: string, detail: string) {
@@ -34,6 +34,12 @@ async function fetchDefaults(cwd: string | undefined, params: { timeoutMs?: unkn
     allowLocalFiles: defaults.allowLocalFiles,
   };
 }
+
+function fetchWasForbidden(text: string): boolean {
+  return /^Failed to fetch URL: HTTP 403\b/m.test(text);
+}
+
+const FORBIDDEN_FALLBACK_NOTE = "Direct fetch failed with HTTP 403; rendered via the Jina Reader instead.";
 
 const WebSearchParams = Type.Object({
   query: Type.Optional(
@@ -100,19 +106,46 @@ export interface WebToolsDeps {
   fetchPageText?: typeof defaultFetchPageText;
   webSearch?: typeof defaultWebSearch;
   renderPageText?: typeof defaultRenderPageText;
+  webRenderEnabled?: () => Promise<boolean>;
 }
 
 export function createWebTools(deps: WebToolsDeps = {}) {
   const fetchPageText = deps.fetchPageText ?? defaultFetchPageText;
   const webSearch = deps.webSearch ?? defaultWebSearch;
   const renderPageText = deps.renderPageText ?? defaultRenderPageText;
+  const webRenderEnabled =
+    deps.webRenderEnabled ?? (async () => (await readConfig()).webRenderEnabled !== false);
+
+  const renderOnForbidden = async (
+    url: string,
+    failedText: string,
+    options: { timeoutMs: number; maxChars?: number; signal?: AbortSignal; cwd?: string },
+  ): Promise<string | null> => {
+    if (!fetchWasForbidden(failedText)) return null;
+    try {
+      if (!(await webRenderEnabled())) return null;
+      const apiKey = await loadJinaApiKey(options.cwd);
+      const rendered = await renderPageText(url, {
+        timeoutMs: options.timeoutMs,
+        maxChars: options.maxChars,
+        signal: options.signal,
+        apiKey,
+      });
+      if (rendered.startsWith("Failed to render URL:") || rendered.startsWith("Blocked:")) return null;
+      return FORBIDDEN_FALLBACK_NOTE + "\n\n" + rendered;
+    } catch {
+      return null;
+    }
+  };
+
   return {
     webSearchTool: defineTool({
       name: "web_search",
       label: "Web Search",
       description:
         "Search the web and fetch page content. Returns snippets for all results. " +
-        "Use the url parameter to fetch full page text from a specific URL.",
+        "Use the url parameter to fetch full page text from a specific URL. " +
+        "A direct fetch refused with HTTP 403 falls back to web_render when that tool is enabled.",
       promptSnippet: "Search the web and fetch page content",
       promptGuidelines: [
         'Use web_search with the url parameter (e.g. {"url": "<URL>"}) to read the full text of a page found in search results.',
@@ -129,21 +162,20 @@ export function createWebTools(deps: WebToolsDeps = {}) {
           onUpdate?.({ content: [{ type: "text", text: `Fetching ${url}...` }], details: {} });
           const cwd = (_ctx as ExtensionContext | undefined)?.cwd;
           const { timeoutMs, maxChars, allowPrivateAddresses, allowLocalFiles } = await fetchDefaults(cwd, params);
-          return {
-            content: [
-              {
-                type: "text",
-                text: await fetchPageText(url, {
-                  timeoutMs,
-                  signal: signal ?? undefined,
-                  maxChars,
-                  allowPrivateAddresses,
-                  allowLocalFiles,
-                }),
-              },
-            ],
-            details: {},
-          };
+          const text = await fetchPageText(url, {
+            timeoutMs,
+            signal: signal ?? undefined,
+            maxChars,
+            allowPrivateAddresses,
+            allowLocalFiles,
+          });
+          const rendered = await renderOnForbidden(url, text, {
+            timeoutMs,
+            maxChars,
+            signal: signal ?? undefined,
+            cwd,
+          });
+          return { content: [{ type: "text", text: rendered ?? text }], details: {} };
         }
         onUpdate?.({ content: [{ type: "text", text: "Searching the web..." }], details: {} });
         const timeoutParam = positiveNumber(params.timeoutMs);
@@ -168,7 +200,11 @@ export function createWebTools(deps: WebToolsDeps = {}) {
         "README API, so the README is returned instead of the repo page's UI chrome. " +
         "Private/loopback/link-local targets and local files (file:// URLs, absolute, ~/ or ./ paths, including " +
         "PDFs) are supported by default; opt out with webFetch.allowPrivateAddresses: false or " +
-        "webFetch.allowLocalFiles: false in settings. The download size is capped.",
+        "webFetch.allowLocalFiles: false in settings. The download size is capped. " +
+        "A direct fetch refused with HTTP 403 falls back to web_render (Jina Reader) when that tool is enabled.",
+      promptGuidelines: [
+        "web_fetch automatically retries HTTP 403 responses through web_render (Jina Reader); do not call web_render again for the same URL after a 403.",
+      ],
       promptSnippet: "Fetch a web page and return readable text content",
       parameters: WebFetchParams,
       renderCall(args, theme) {
@@ -185,7 +221,13 @@ export function createWebTools(deps: WebToolsDeps = {}) {
           allowPrivateAddresses,
           allowLocalFiles,
         });
-        return { content: [{ type: "text", text }], details: {} };
+        const rendered = await renderOnForbidden(params.url, text, {
+          timeoutMs,
+          maxChars,
+          signal: signal ?? undefined,
+          cwd,
+        });
+        return { content: [{ type: "text", text: rendered ?? text }], details: {} };
       },
     }),
     webRenderTool: defineTool({

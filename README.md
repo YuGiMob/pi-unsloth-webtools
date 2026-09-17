@@ -42,7 +42,8 @@ Mirrors Unsloth Studio's `web_search` tool:
   `Snippet:` blocks separated by `---`, ending with the hint to pass `{"url": "<URL>"}` to
   read a full page.
 - Accepts an optional `url` parameter; when given, fetches that page's text instead of
-  searching (optionally truncated with `maxChars`).
+  searching (optionally truncated with `maxChars`). An HTTP 403 on that fetch falls back
+  to `web_render` when the tool is enabled.
 - Rate-limit, timeout, and empty-result messages mirror Studio's `_search_failure_message`.
 - Transient engine failures (network errors or null responses) are retried once with a short
   backoff inside the same timeout budget (a retry that cannot fit in the remaining budget is
@@ -119,6 +120,9 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   `Date:` (`article:published_time` / `dc.date` / `date`) and `Site:` (`og:site_name` /
   `application-name`) lines are added when declared, so the model can judge recency and
   provenance.
+- A direct fetch refused with HTTP 403 is retried through `web_render` automatically when that
+  tool is enabled; the rendered page is prefixed with a note saying so. When `web_render` is
+  disabled or the render also fails, the original `Failed to fetch URL: HTTP 403 ...` is returned.
 
 ### web_render
 
@@ -137,6 +141,7 @@ that need JavaScript to render:
   [Companion: rotating exit IPs](#companion-rotating-exit-ips).
 - Enabled by default. Disable it with `/webtools-config` (`webRenderEnabled` in
   `~/.config/pi-unsloth-webtools/config.json`), which deactivates the tool for the session.
+- Also used automatically when a `web_fetch` or `web_search` url-mode fetch is refused with HTTP 403.
 
 ## Known differences from Studio
 
@@ -148,6 +153,8 @@ that need JavaScript to render:
 - Third-party rendering: the extra `web_render` tool asks the Jina Reader (`r.jina.ai`) to fetch
   the page, so the target URL leaves the machine. Studio has no third-party rendering path. This
   path always refuses local files and non-public addresses, regardless of the local-access settings.
+  A direct fetch refused with HTTP 403 is retried through it automatically when enabled, so those
+  targets also leave the machine in that case.
 - PDF styling: MuPDF.js exposes one font per line, so mixed-style lines style the
   whole line instead of per-span; superscript, subscript, underline, strikeout, and
   highlight markers are not emitted. Tables use a conservative text-grid detector:
@@ -260,7 +267,7 @@ first changed:
 
 | Key | Default | Description |
 |---|---|---|
-| `webRenderEnabled` | `true` | When `false`, the `web_render` tool is deactivated for the session; `web_search` and `web_fetch` are unaffected |
+| `webRenderEnabled` | `true` | When `false`, the `web_render` tool is deactivated for the session and the automatic HTTP 403 fallback in `web_fetch` / `web_search` url mode is disabled |
 
 On non-Windows platforms the directory honors `XDG_CONFIG_HOME` when set (falling back to
 `~/.config`); on Windows it always uses `~/.config`.
@@ -284,7 +291,7 @@ Match on the exact prefix. Do not retry blocked hosts with spelling tricks.
 | Private address blocked | `Blocked: refusing to fetch the non-public address ...` | The SSRF guard is active (`allowPrivateAddresses: false`); remove it or set `true` to reach localhost/LAN, and write the scheme explicitly (`http://localhost:3000`). |
 | Local file blocked | `Blocked: the URL has an invalid hostname or port.` for paths | Local files are disabled: remove `allowLocalFiles: false` to read `file://`, absolute, `~/`, or `./` paths. |
 | File read failed | `Failed to read file: ...` | Check the path exists and is a regular file. |
-| HTTP failure | `Failed to fetch URL: HTTP ...` | Fix the URL. A 404 automatically tries a Wayback snapshot. |
+| HTTP failure | `Failed to fetch URL: HTTP ...` | Fix the URL. A 404 automatically tries a Wayback snapshot; a 403 retries through `web_render` when enabled. |
 | Non-text / binary | `(non-text content:` / `(binary content,` | Not readable as text by design. |
 | PDF without text | `(PDF contains no extractable text)` / `(PDF content could not be read as text...)` | Scanned or encrypted PDF. |
 | Download cap hit | `... (page truncated at the download limit)` | Raw fetch hit 512 KiB (10 MiB for PDFs). |

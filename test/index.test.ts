@@ -223,6 +223,73 @@ describe("web_fetch tool", () => {
   });
 });
 
+describe("http 403 fallback", () => {
+  const FORBIDDEN = "Failed to fetch URL: HTTP 403 Forbidden";
+
+  function textOf(result: unknown): string {
+    const content = (result as { content?: { text?: string }[] } | undefined)?.content;
+    return content?.[0]?.text ?? "";
+  }
+
+  it("falls back to web_render when web_fetch is refused with 403", async () => {
+    const fetchPageText = vi.fn(async () => FORBIDDEN);
+    const renderPageText = vi.fn(async () => "Title: Blocked\n\nRendered body text.");
+    const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
+    expect(renderPageText).toHaveBeenCalledWith("https://example.com/bot", expect.objectContaining({ timeoutMs: 60000 }));
+    const text = textOf(result);
+    expect(text).toContain("rendered via the Jina Reader instead");
+    expect(text).toContain("Rendered body text.");
+  });
+
+  it("falls back in web_search url mode", async () => {
+    const fetchPageText = vi.fn(async () => FORBIDDEN);
+    const renderPageText = vi.fn(async () => "Rendered body text.");
+    const { webSearchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
+    const result = await webSearchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
+    expect(renderPageText).toHaveBeenCalledTimes(1);
+    expect(textOf(result)).toContain("Rendered body text.");
+  });
+
+  it("keeps the 403 when web_render is disabled", async () => {
+    const fetchPageText = vi.fn(async () => FORBIDDEN);
+    const renderPageText = vi.fn(async () => "Rendered body text.");
+    const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => false });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
+    expect(textOf(result)).toBe(FORBIDDEN);
+    expect(renderPageText).not.toHaveBeenCalled();
+  });
+
+  it("honors the stored webRenderEnabled setting by default", async () => {
+    await withTempConfig(async () => {
+      await writeConfig({ webRenderEnabled: false });
+      const fetchPageText = vi.fn(async () => FORBIDDEN);
+      const renderPageText = vi.fn(async () => "Rendered body text.");
+      const { webFetchTool } = createWebTools({ fetchPageText, renderPageText });
+      const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
+      expect(textOf(result)).toBe(FORBIDDEN);
+      expect(renderPageText).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps the 403 when the render also fails", async () => {
+    const fetchPageText = vi.fn(async () => FORBIDDEN);
+    const renderPageText = vi.fn(async () => "Failed to render URL: 429 Too Many Requests");
+    const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
+    expect(textOf(result)).toBe(FORBIDDEN);
+  });
+
+  it("does not render for other fetch failures", async () => {
+    const fetchPageText = vi.fn(async () => "Failed to fetch URL: HTTP 404 Not Found");
+    const renderPageText = vi.fn(async () => "Rendered body text.");
+    const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/gone" }, undefined, undefined, {} as never);
+    expect(textOf(result)).toBe("Failed to fetch URL: HTTP 404 Not Found");
+    expect(renderPageText).not.toHaveBeenCalled();
+  });
+});
+
 describe("web_render tool", () => {
   it("renders the url with maxChars and timeoutMs and reports progress", async () => {
     const renderPageText = vi.fn(async (_url: string, _options?: RenderPageOptions) => "rendered");
