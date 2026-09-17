@@ -1,5 +1,6 @@
 import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { collapseWhitespace } from "./html-to-md.ts";
 import { SEARCH_TIMEOUT_MS, webSearch as defaultWebSearch } from "./web-search.ts";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchPageText as defaultFetchPageText } from "./web-fetch.ts";
@@ -10,7 +11,7 @@ import { WebToolsConfigOverlay } from "./config-ui.ts";
 
 function toolCallLine(theme: Theme, name: string, detail: string) {
   const line = theme.fg("toolTitle", theme.bold(name)) + (detail ? ` ${theme.fg("accent", detail)}` : "");
-  return { render: () => [line], invalidate: () => {} };
+  return { render: (width: number) => [truncateToWidth(line, width)], invalidate: () => {} };
 }
 
 function collapsedArg(value: unknown): string {

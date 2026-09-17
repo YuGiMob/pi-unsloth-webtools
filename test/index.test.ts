@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import registerExtension, { createWebTools } from "../index.ts";
 import type { FetchPageOptions } from "../web-fetch.ts";
 import type { WebSearchOptions } from "../web-search.ts";
@@ -314,5 +315,20 @@ describe("tool call rendering", () => {
   it("falls back to the bare tool name without arguments", () => {
     expect(callText(webSearchTool.renderCall?.({}, plainTheme, {} as never))).toBe("web_search");
     expect(callText(webFetchTool.renderCall?.({ url: "" }, plainTheme, {} as never))).toBe("web_fetch");
+  });
+
+  it("truncates long targets to the render width", () => {
+    const long = "q".repeat(200);
+    const components = [
+      webSearchTool.renderCall?.({ query: long }, plainTheme, {} as never),
+      webSearchTool.renderCall?.({ url: `https://example.com/${long}` }, plainTheme, {} as never),
+      webFetchTool.renderCall?.({ url: `https://example.com/${long}` }, plainTheme, {} as never),
+      webRenderTool.renderCall?.({ url: `https://example.com/${long}` }, plainTheme, {} as never),
+    ];
+    for (const component of components) {
+      const line = component?.render(40)[0] ?? "";
+      expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+      expect(line).toContain("...");
+    }
   });
 });
