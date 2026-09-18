@@ -81,6 +81,11 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 - Transient DNS failures (EAI_AGAIN, resolver timeouts, connection refusals) are retried once
   with a short backoff inside the same deadline, so a brief resolver hiccup does not fail a
   fetch; the deadline abort cuts a retry short when no budget remains.
+- Proxy environment variables are honored when they name a SOCKS5 proxy: `HTTPS_PROXY` /
+  `HTTP_PROXY` / `ALL_PROXY` (with `NO_PROXY` exclusions) tunnel the pinned connection, so a
+  Tor-mode agent routes `web_fetch` and `web_search` url mode through its exit. `socks5h` is
+  treated like `socks5`: the host is resolved locally for the guard and the pinned IP is what the
+  proxy connects to. Other proxy schemes are ignored (direct connection).
 - GitHub repo root pages are rewritten to the unauthenticated README API
   (`Accept: application/vnd.github.raw+json`), falling back to the raw README URL
   (`raw.githubusercontent.com`, no API rate limit) and then to the HTML page on failure.
@@ -174,9 +179,11 @@ that need JavaScript to render:
   generic engine failures. The timeout budget bounds the entire sweep: per-engine
   timeouts shrink as the budget is consumed, so the reported timeout matches the
   worst-case wall time.
-- Proxies: Studio routes through environment proxies; this port's direct fetch always connects
-  directly with DNS pinning (deliberately out of scope). The search and `web_render` paths use the
-  process-wide `fetch`, so an agent-level proxy dispatcher does apply to them — see
+- Proxies: Studio routes through environment proxies; this port resolves and pins the target IP and
+  tunnels that connection through `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` when the proxy is a
+  SOCKS5 proxy (`NO_PROXY` exclusions respected; DNS stays local for the guard). Other proxy
+  schemes fall back to a direct connection. The search and `web_render` paths use the process-wide
+  `fetch`, so an agent-level proxy dispatcher applies there too — see
   [Companion: rotating exit IPs](#companion-rotating-exit-ips).
 - Dedup and titles: the aggregator keys on canonicalized hrefs (`utm_*`/tracking parameters
   and fragments stripped, then the URL re-serialized); fetched HTML pages are prefixed with
@@ -218,8 +225,10 @@ the current Tor exit, and Jina rate-limits keyless Reader requests per outgoing 
 pi install npm:pi-unsloth-webtools npm:pi-tor-proxy
 ```
 
-`web_fetch` is not routed: it connects directly through `node:http`/`node:https` with a pinned,
-validated IP and ignores the proxy variables (see the proxy note under Known differences).
+`web_fetch` and `web_search` url mode also route: they resolve and pin the target IP, then tunnel
+the connection through the SOCKS5 proxy named by `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` (with
+`NO_PROXY` exclusions, so localhost and local files stay direct). DNS is still resolved locally for
+the SSRF guard, and the proxy connects to that pinned IP.
 Caveats: Tor mode supports Linux and macOS only, adds latency, and many search engines and
 Cloudflare-fronted services challenge or block Tor exits, so cycling helps with per-IP limits but
 is not a guarantee.
@@ -274,7 +283,7 @@ On non-Windows platforms the directory honors `XDG_CONFIG_HOME` when set (fallin
 
 Tool params always win over file defaults. Search dedup also strips default ports, so `https://example.com:443/a` and `https://example.com/a` collapse.
 
-Environment overrides: `PI_UNSLOTH_CACHE_DIR` changes the fetch cache directory, `PI_UNSLOTH_WEBTOOLS_STATS` opts into append-only sweep stats JSONL, `PI_CODING_AGENT_DIR` / `PI_AGENT_DIR` change the global settings directory, and `JINA_API_KEY` supplies the `web_render` key when no settings key is set. Cache entries live 1 hour and stale copies are served only after a network failure.
+Environment overrides: `PI_UNSLOTH_CACHE_DIR` changes the fetch cache directory, `PI_UNSLOTH_WEBTOOLS_STATS` opts into append-only sweep stats JSONL, `PI_CODING_AGENT_DIR` / `PI_AGENT_DIR` change the global settings directory, and `JINA_API_KEY` supplies the `web_render` key when no settings key is set. Cache entries live 1 hour and stale copies are served only after a network failure. SOCKS5 proxies named by `HTTPS_PROXY`, `HTTP_PROXY`, or `ALL_PROXY` are honored on every fetch (`NO_PROXY` exclusions apply).
 
 ## Troubleshooting
 
@@ -292,6 +301,7 @@ Match on the exact prefix. Do not retry blocked hosts with spelling tricks.
 | Local file blocked | `Blocked: the URL has an invalid hostname or port.` for paths | Local files are disabled: remove `allowLocalFiles: false` to read `file://`, absolute, `~/`, or `./` paths. |
 | File read failed | `Failed to read file: ...` | Check the path exists and is a regular file. |
 | HTTP failure | `Failed to fetch URL: HTTP ...` | Fix the URL. A 404 automatically tries a Wayback snapshot; a 403 retries through `web_render` when enabled. |
+| Proxy failure | `Failed to fetch URL: SOCKS5 proxy ...` | The SOCKS5 proxy refused or failed (for example Tor is stopping). Check the proxy, or unset the proxy variables for a direct fetch. |
 | Non-text / binary | `(non-text content:` / `(binary content,` | Not readable as text by design. |
 | PDF without text | `(PDF contains no extractable text)` / `(PDF content could not be read as text...)` | Scanned or encrypted PDF. |
 | Download cap hit | `... (page truncated at the download limit)` | Raw fetch hit 512 KiB (10 MiB for PDFs). |

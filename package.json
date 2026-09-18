@@ -33,6 +33,7 @@
     "engines.ts",
     "entities.ts",
     "pdf.ts",
+    "proxy.ts",
     "user-agents.ts",
     "cache.ts",
     "settings.ts",

@@ -26,6 +26,7 @@ import type { AttrDict } from "./html-to-md.ts";
 import { INVALID_CHARREFS } from "./entities.ts";
 import { getCached, isFresh, setCached, staleNotice } from "./cache.ts";
 import { extractPdfText } from "./pdf.ts";
+import { socksProxyForUrl, tunnelAgent } from "./proxy.ts";
 import { randomUserAgent } from "./user-agents.ts";
 
 const MAX_FETCH_BYTES = 512 * 1024;
@@ -635,23 +636,37 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
   return new Promise((resolve, reject) => {
     const url = opts.url;
     const transport = url.protocol === "https:" ? https : http;
+    const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
     const options: https.RequestOptions = {
       method: "GET",
       host: url.hostname,
-      port: url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80,
+      port,
       path: url.pathname + url.search,
       headers: opts.headers,
       timeout: opts.inactivityMs,
-      servername: url.protocol === "https:" ? url.hostname : undefined,
-      lookup: ((_hostname: string, _options: unknown, _callback: unknown) => {
+    };
+    const proxy = socksProxyForUrl(url);
+    if (proxy) {
+      options.agent = tunnelAgent(url, {
+        proxy,
+        ip: opts.pinnedIp,
+        family: opts.family,
+        port,
+        servername: url.hostname,
+        timeoutMs: Math.max(1, opts.inactivityMs),
+        signal: opts.signal,
+      });
+    } else {
+      options.servername = url.protocol === "https:" ? url.hostname : undefined;
+      options.lookup = ((_hostname: string, _options: unknown, _callback: unknown) => {
         const done = (typeof _options === "function" ? _options : _callback) as (err: unknown, address: unknown, family?: unknown) => void;
         if ((_options as { all?: boolean } | undefined)?.all) {
           done(null, [{ address: opts.pinnedIp, family: opts.family }]);
         } else {
           done(null, opts.pinnedIp, opts.family);
         }
-      }) as typeof options.lookup,
-    };
+      }) as typeof options.lookup;
+    }
     let settled = false;
     let resRef: IncomingMessage | null = null;
     let decoderRef: Transform | null = null;
@@ -898,6 +913,8 @@ export async function fetchUrlRaw(
         signal,
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (message === "cancelled" || message === "timed out") return emptyResult(fetchErrorMessage(err));
       if (
         !(err instanceof FetchCancelledError) &&
         !(err instanceof FetchTimeoutError) &&
