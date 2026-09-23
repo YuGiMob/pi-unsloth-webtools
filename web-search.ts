@@ -114,6 +114,6 @@ export function formatSearchResults(results: SearchResult[]): string {
   return (
     text +
     "\n\n---\n\nThese are only short snippets. " +
-    'To get the full page content, call web_search with the url parameter (e.g. {"url": "<URL>"}).'
+    "To read a page, call web_fetch with its URL."
   );
 }

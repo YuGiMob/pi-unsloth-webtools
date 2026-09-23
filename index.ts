@@ -143,12 +143,10 @@ export function createWebTools(deps: WebToolsDeps = {}) {
       name: "web_search",
       label: "Web Search",
       description:
-        "Search the web and fetch page content. Returns snippets for all results. " +
-        "Use the url parameter to fetch full page text from a specific URL. " +
-        "A direct fetch refused with HTTP 403 falls back to web_render when that tool is enabled.",
-      promptSnippet: "Search the web and fetch page content",
+        "Search the web and return snippets for the top results. Pass url instead of query to read one URL's text in the same call.",
+      promptSnippet: "Search the web and return snippets",
       promptGuidelines: [
-        'Use web_search with the url parameter (e.g. {"url": "<URL>"}) to read the full text of a page found in search results.',
+        "Web tool order: web_search to discover, web_fetch for a known URL, web_render only when web_fetch cannot read the page.",
       ],
       parameters: WebSearchParams,
       renderCall(args, theme) {
@@ -200,10 +198,9 @@ export function createWebTools(deps: WebToolsDeps = {}) {
         "README API, so the README is returned instead of the repo page's UI chrome. " +
         "Private/loopback/link-local targets and local files (file:// URLs, absolute, ~/ or ./ paths, including " +
         "PDFs) are supported by default; opt out with webFetch.allowPrivateAddresses: false or " +
-        "webFetch.allowLocalFiles: false in settings. The download size is capped. " +
-        "A direct fetch refused with HTTP 403 falls back to web_render (Jina Reader) when that tool is enabled.",
+        "webFetch.allowLocalFiles: false in settings. The download size is capped.",
       promptGuidelines: [
-        "web_fetch automatically retries HTTP 403 responses through web_render (Jina Reader); do not call web_render again for the same URL after a 403.",
+        "web_fetch retries an HTTP 403 through web_render automatically; never call web_render again for the same URL after a 403.",
       ],
       promptSnippet: "Fetch a web page and return readable text content",
       parameters: WebFetchParams,
@@ -235,13 +232,10 @@ export function createWebTools(deps: WebToolsDeps = {}) {
       label: "Web Render",
       description:
         "Render a public web page to Markdown through the third-party Jina Reader (r.jina.ai). " +
-        "Use it for JavaScript-rendered pages that web_fetch cannot read. " +
+        "Use it when web_fetch cannot read the page: JavaScript-rendered pages, or pages where web_fetch returned \"(page returned no readable text)\". " +
         "The target URL is sent to Jina; local files and non-public addresses are refused. " +
         "An optional JINA_API_KEY or unslothWebTools.jinaApiKey raises the Reader's rate limits.",
       promptSnippet: "Render a JavaScript-rendered page to Markdown via the Jina Reader",
-      promptGuidelines: [
-        'Use web_render when web_fetch reports "(page returned no readable text)" or the page only fills in through JavaScript.',
-      ],
       parameters: WebRenderParams,
       renderCall(args, theme) {
         return toolCallLine(theme, "web_render", collapsedArg(args.url));

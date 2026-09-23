@@ -39,7 +39,7 @@ Mirrors Unsloth Studio's `web_search` tool:
   re-serialized, collapsing host-case, default-port, and trailing-slash variants — so the
   same page found via different tracking links collapses), and the same `SimpleFilterRanker`
   re-ranking. Formats results identically: `Title:` / `URL:` /
-  `Snippet:` blocks separated by `---`, ending with the hint to pass `{"url": "<URL>"}` to
+  `Snippet:` blocks separated by `---`, ending with the hint to call `web_fetch` to
   read a full page.
 - Accepts an optional `url` parameter; when given, fetches that page's text instead of
   searching (optionally truncated with `maxChars`). An HTTP 403 on that fetch falls back

@@ -49,12 +49,12 @@ describe("search contract", () => {
     expect(searchFailureMessage(new Error("boom"))).toBe("Search failed: boom");
   });
 
-  it("ends formatted results with the url hint", () => {
+  it("ends formatted results with the web_fetch hint", () => {
     const out = formatSearchResults([{ title: "T", href: "https://x.com/", body: "S" }]);
     expect(out).toContain("Title: T");
     expect(out).toContain("URL: https://x.com/");
     expect(out).toContain("Snippet: S");
-    expect(out).toContain('{"url": "<URL>"}');
+    expect(out).toContain("call web_fetch");
   });
 });
 
