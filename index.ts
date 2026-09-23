@@ -143,7 +143,7 @@ export function createWebTools(deps: WebToolsDeps = {}) {
       name: "web_search",
       label: "Web Search",
       description:
-        "Search the web and return snippets for the top results. Pass url instead of query to read one URL's text in the same call.",
+        "Search the web and return snippets for the top results. Pass url instead of query to read a page found in the same search; use web_fetch for known URLs.",
       promptSnippet: "Search the web and return snippets",
       promptGuidelines: [
         "Web tool order: web_search to discover, web_fetch for a known URL, web_render only when web_fetch cannot read the page.",
