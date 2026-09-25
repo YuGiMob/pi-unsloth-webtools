@@ -70,6 +70,10 @@ export function normalizeDomain(value: unknown): string {
   return asciiDomain;
 }
 
+export function stripIpv6Brackets(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+}
+
 function compressIpv6(ip: string): string {
   const segments = ip.toLowerCase().split("::");
   if (segments.length > 2) throw new Error("invalid ipv6");

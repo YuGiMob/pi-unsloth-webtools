@@ -795,6 +795,38 @@ describe("request headers", () => {
     expect(result.error).toBeNull();
     expect(seen["Accept-Encoding"]).toBe("identity");
   });
+
+  it("sends single-bracket host headers for ipv6 literals", async () => {
+    let seenHost = "";
+    const result = await fetchUrlRaw("https://[2606:4700:4700::1111]:8443/path", {
+      seams: {
+        resolve: async () => ({ ok: true, reason: "", ip: "2606:4700:4700::1111", family: 6 }),
+        request: async (opts) => {
+          seenHost = opts.headers["Host"] ?? "";
+          return { status: 200, headers: { "content-type": "text/plain" }, body: Buffer.from("ipv6 body") };
+        },
+      },
+    });
+    expect(result.error).toBeNull();
+    expect(result.body).toBe("ipv6 body");
+    expect(seenHost).toBe("[2606:4700:4700::1111]:8443");
+  });
+
+  it("does not pass an ip literal to tls as the servername", async () => {
+    const error = await requestHop({
+      url: new URL("https://[::1]:1/"),
+      pinnedIp: "::1",
+      family: 6,
+      headers: { Host: "[::1]:1" },
+      maxBytes: 1024,
+      maxPdfBytes: 1024,
+      inactivityMs: 2000,
+    }).then(
+      () => null,
+      (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
+    );
+    expect(error?.message ?? "").not.toContain("ServerName");
+  });
 });
 
 describe("download cap truncation", () => {

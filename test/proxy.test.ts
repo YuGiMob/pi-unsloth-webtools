@@ -229,6 +229,16 @@ describe("socksProxyForUrl", () => {
     vi.stubEnv("NO_PROXY", "*");
     expect(socksProxyForUrl(new URL("https://unrelated.test/"))).toBeNull();
   });
+
+  it("matches no_proxy entries against ipv6 literals", () => {
+    vi.stubEnv("HTTPS_PROXY", "socks5://127.0.0.1:9050");
+    for (const entry of ["::1", "[::1]"]) {
+      vi.stubEnv("NO_PROXY", entry);
+      expect(socksProxyForUrl(new URL("https://[::1]:8443/"))).toBeNull();
+    }
+    vi.stubEnv("NO_PROXY", "::1");
+    expect(socksProxyForUrl(new URL("https://[2606:4700:4700::1111]/"))).not.toBeNull();
+  });
 });
 
 describe("proxied fetch", () => {

@@ -2,6 +2,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import type { LookupAllOptions } from "node:dns";
 import http from "node:http";
 import https from "node:https";
+import { isIP } from "node:net";
 import { open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -19,6 +20,7 @@ import {
   isPublicIp,
   MAX_SIGNAL_TIMEOUT_MS,
   normalizeUrlScheme,
+  stripIpv6Brackets,
   type WebsitePolicy,
 } from "./web-access.ts";
 import { collapseWhitespace, decodeHtmlEntities, feedHtml, htmlToMarkdown } from "./html-to-md.ts";
@@ -637,9 +639,10 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
     const url = opts.url;
     const transport = url.protocol === "https:" ? https : http;
     const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+    const hostname = stripIpv6Brackets(url.hostname);
     const options: https.RequestOptions = {
       method: "GET",
-      host: url.hostname,
+      host: hostname,
       port,
       path: url.pathname + url.search,
       headers: opts.headers,
@@ -652,12 +655,12 @@ export function requestHop(opts: HopOptions): Promise<HopResponse> {
         ip: opts.pinnedIp,
         family: opts.family,
         port,
-        servername: url.hostname,
+        servername: hostname,
         timeoutMs: Math.max(1, opts.inactivityMs),
         signal: opts.signal,
       });
     } else {
-      options.servername = url.protocol === "https:" ? url.hostname : undefined;
+      options.servername = url.protocol === "https:" && !isIP(hostname) ? hostname : undefined;
       options.lookup = ((_hostname: string, _options: unknown, _callback: unknown) => {
         const done = (typeof _options === "function" ? _options : _callback) as (err: unknown, address: unknown, family?: unknown) => void;
         if ((_options as { all?: boolean } | undefined)?.all) {
@@ -881,9 +884,10 @@ export async function fetchUrlRaw(
     const budgetResult = checkBudget();
     if (budgetResult !== null) return budgetResult;
     const parsed = new URL(currentUrl);
-    const hostHeader = parsed.hostname.includes(":")
-      ? `[${parsed.hostname}]${parsed.port ? `:${parsed.port}` : ""}`
-      : parsed.hostname + (parsed.port ? `:${parsed.port}` : "");
+    const parsedHostname = stripIpv6Brackets(parsed.hostname);
+    const hostHeader = parsedHostname.includes(":")
+      ? `[${parsedHostname}]${parsed.port ? `:${parsed.port}` : ""}`
+      : parsedHostname + (parsed.port ? `:${parsed.port}` : "");
     const headers: Record<string, string> = {
       "User-Agent": userAgent,
       Host: hostHeader,

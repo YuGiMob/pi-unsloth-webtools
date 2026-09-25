@@ -3,6 +3,7 @@ import https from "node:https";
 import net from "node:net";
 import tls from "node:tls";
 import type { Duplex } from "node:stream";
+import { stripIpv6Brackets } from "./web-access.ts";
 
 export interface SocksProxy {
   host: string;
@@ -124,7 +125,7 @@ export function socksProxyForUrl(url: URL): SocksProxy | null {
   const proxy = parseSocksProxy(firstEnv(url.protocol === "https:" ? HTTPS_PROXY_VARS : HTTP_PROXY_VARS));
   if (!proxy) return null;
   const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
-  if (bypassesProxy(url.hostname, port)) return null;
+  if (bypassesProxy(stripIpv6Brackets(url.hostname), port)) return null;
   return proxy;
 }
 
