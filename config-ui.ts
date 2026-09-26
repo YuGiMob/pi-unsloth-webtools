@@ -15,8 +15,8 @@ export function configRows(config: Config): ConfigRow[] {
   return [
     {
       key: "webRenderEnabled",
-      label: "Web render",
-      hint: "web_render tool (Jina Reader)",
+      label: "JavaScript rendering",
+      hint: "Jina Reader fallback",
       enabled: config.webRenderEnabled !== false,
     },
   ];

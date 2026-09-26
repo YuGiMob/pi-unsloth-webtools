@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { brotliCompressSync, deflateRawSync, deflateSync, gzipSync } from "node:zlib";
 import {
   FetchCancelledError,
+  fetchPageOutcome,
   fetchPageText,
   fetchUrlRaw,
   looksLikeHtml,
@@ -1186,5 +1187,50 @@ describe("page metadata prefix", () => {
     const out = await fetchPageText("https://example.com/doc", { rawFetch });
     expect(out).toContain(`Author: ${'x'.repeat(299)}\n`);
     expect(out).not.toContain("\ufffd");
+  });
+});
+
+describe("javascript page detection", () => {
+  const SHELL =
+    '<html><head><title>App</title><meta name="description" content="A client-rendered app"></head>' +
+    '<body><div id="root"></div><script src="/a.js"></script><script src="/b.js"></script><script src="/c.js"></script></body></html>';
+
+  it("flags a thin spa shell", async () => {
+    const outcome = await fetchPageOutcome("https://example.com/app", {
+      rawFetch: async () => ({ error: null, body: SHELL, contentType: "text/html" }),
+    });
+    expect(outcome.text).toContain("Title: App");
+    expect(outcome.hint?.reason).toBe("js-shell");
+    expect(outcome.hint?.evidence).toContain("spa-markers");
+  });
+
+  it("flags an empty html document", async () => {
+    const outcome = await fetchPageOutcome("https://example.com/blank", {
+      rawFetch: async () => ({ error: null, body: "<html><body></body></html>", contentType: "text/html" }),
+    });
+    expect(outcome.text).toBe("(page returned no readable text)");
+    expect(outcome.hint).toEqual({ reason: "empty", evidence: [] });
+  });
+
+  it("leaves substantial pages unhinted", async () => {
+    const html = '<html><body><div id="root"></div><p>' + "Real content sentence. ".repeat(30) + "</p></body></html>";
+    const outcome = await fetchPageOutcome("https://example.com/article", {
+      rawFetch: async () => ({ error: null, body: html, contentType: "text/html" }),
+    });
+    expect(outcome.hint).toBeNull();
+  });
+
+  it("does not hint for plain text", async () => {
+    const outcome = await fetchPageOutcome("https://example.com/file.txt", {
+      rawFetch: async () => ({ error: null, body: "plain body", contentType: "text/plain" }),
+    });
+    expect(outcome.hint).toBeNull();
+  });
+
+  it("keeps returning the text through fetchPageText", async () => {
+    const text = await fetchPageText("https://example.com/", {
+      rawFetch: async () => ({ error: null, body: "<html><body><p>Hello</p></body></html>", contentType: "text/html" }),
+    });
+    expect(text).toContain("Hello");
   });
 });

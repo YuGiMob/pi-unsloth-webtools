@@ -23,7 +23,7 @@ import {
   stripIpv6Brackets,
   type WebsitePolicy,
 } from "./web-access.ts";
-import { collapseWhitespace, decodeHtmlEntities, feedHtml, htmlToMarkdown } from "./html-to-md.ts";
+import { collapseWhitespace, decodeHtmlEntities, feedHtml, htmlToMarkdown, visibleChars } from "./html-to-md.ts";
 import type { AttrDict } from "./html-to-md.ts";
 import { INVALID_CHARREFS } from "./entities.ts";
 import { getCached, isFresh, setCached, staleNotice } from "./cache.ts";
@@ -126,6 +126,14 @@ const HTML_LEADING_RE = new RegExp(
   `^<(?:!doctype\\s+html|/?(?:${HTML_LEADING_TAGS.join("|")})\\b)`,
 );
 const HTML_DOCUMENT_RE = /^<(?:!doctype\s+html\b|\/?(?:html|head|body)\b)/;
+
+const RENDER_THIN_PROSE_CHARS = 400;
+const RENDER_SCRIPT_SHARE = 0.5;
+const RENDER_SCRIPT_MIN_HTML_BYTES = 8192;
+const RENDER_MIN_SCRIPTS = 3;
+const RENDER_NOSCRIPT_MIN_CHARS = 40;
+const RENDER_SPA_MARKERS =
+  /(?:id\s*=\s*["']?(?:root|app|__next|__nuxt)["']?|data-reactroot|ng-version|__NEXT_DATA__|__NUXT__|__PRELOADED_STATE__)/i;
 
 const MIN_SINGLE_BYTE_ASCII_RATIO = 3 / 4;
 const ASCII_TEXT_BYTES = new Set<number>([
@@ -237,6 +245,16 @@ export interface RawFetchResult {
   contentType: string;
 }
 
+export interface RenderHint {
+  reason: "empty" | "js-shell";
+  evidence: string[];
+}
+
+export interface FetchPageOutcome {
+  text: string;
+  hint: RenderHint | null;
+}
+
 function htmlProbe(body: string, re: RegExp): boolean {
   let i = 0;
   const n = body.length;
@@ -265,6 +283,46 @@ export function looksLikeHtml(body: string): boolean {
 
 export function looksLikeHtmlDocument(body: string): boolean {
   return htmlProbe(body, HTML_DOCUMENT_RE);
+}
+
+function noscriptText(html: string): string {
+  const parts: string[] = [];
+  for (const match of html.match(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi) ?? []) {
+    parts.push(match.replace(/<[^>]*>/g, " "));
+  }
+  return collapseWhitespace(decodeHtmlEntities(parts.join(" ")));
+}
+
+export function needsRenderHint(html: string, converted: string): RenderHint | null {
+  const prose = visibleChars(converted);
+  if (prose >= RENDER_THIN_PROSE_CHARS) return null;
+  if (prose === 0) return { reason: "empty", evidence: [] };
+  const evidence: string[] = [];
+  let score = 0;
+  if (RENDER_SPA_MARKERS.test(html)) {
+    evidence.push("spa-markers");
+    score += 2;
+  }
+  const scriptCount = (html.match(/<script\b/gi) ?? []).length;
+  let scriptBytes = 0;
+  for (const script of html.match(/<script\b[^>]*>[\s\S]*?<\/script>/gi) ?? []) scriptBytes += script.length;
+  if (html.length >= RENDER_SCRIPT_MIN_HTML_BYTES && scriptBytes >= html.length * RENDER_SCRIPT_SHARE) {
+    evidence.push("script-heavy");
+    score += 2;
+  }
+  if (scriptCount >= RENDER_MIN_SCRIPTS) {
+    evidence.push("scripts");
+    score += 1;
+  }
+  if (noscriptText(html).length >= RENDER_NOSCRIPT_MIN_CHARS) {
+    evidence.push("noscript");
+    score += 1;
+  }
+  if (extractPageMeta(html).description) {
+    evidence.push("description");
+    score += 1;
+  }
+  return score >= 2 ? { reason: "js-shell", evidence } : null;
 }
 
 function parseContentType(value: string | null | undefined): string {
@@ -1137,6 +1195,7 @@ interface PageMeta {
   author: string;
   date: string;
   site: string;
+  description: string;
 }
 
 const META_KEYS: Record<string, keyof PageMeta> = {
@@ -1149,6 +1208,8 @@ const META_KEYS: Record<string, keyof PageMeta> = {
   datepublished: "date",
   "og:site_name": "site",
   "application-name": "site",
+  description: "description",
+  "og:description": "description",
 };
 
 function cutAtCharBoundary(text: string, maxChars: number): string {
@@ -1169,7 +1230,7 @@ function capMetaValue(value: string): string {
 }
 
 function extractPageMeta(html: string): PageMeta {
-  const meta: PageMeta = { title: extractPageTitle(html), author: "", date: "", site: "" };
+  const meta: PageMeta = { title: extractPageTitle(html), author: "", date: "", site: "", description: "" };
   const seen = new Set<string>();
   const record = (name: string, attrs: AttrDict) => {
     if (name !== "meta") return;
@@ -1343,10 +1404,10 @@ async function readLocalFile(
   }
 }
 
-export async function fetchPageText(
+export async function fetchPageOutcome(
   url: string,
   options: FetchPageOptions = {},
-): Promise<string> {
+): Promise<FetchPageOutcome> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
   const now = options.nowMs ?? Date.now;
   const deadlineMs = options.deadlineMs ?? now() + timeoutMs;
@@ -1357,18 +1418,19 @@ export async function fetchPageText(
   if (options.allowLocalFiles !== false) {
     const localPath = parseLocalPath(url);
     if (localPath !== null) {
-      if (!localPath) return "Failed to read file: invalid file URL.";
-      return readLocalFile(localPath, {
+      if (!localPath) return { text: "Failed to read file: invalid file URL.", hint: null };
+      const localText = await readLocalFile(localPath, {
         signal,
         maxChars,
         maxBytes: options.maxBytes,
         maxPdfBytes: options.maxPdfBytes,
       });
+      return { text: localText, hint: null };
     }
   }
   url = normalizeUrlScheme(url);
   const [allowed, reason] = checkUrlAccess(url, policy);
-  if (!allowed) return reason;
+  if (!allowed) return { text: reason, hint: null };
   const rawFetchOptions = {
     deadlineMs,
     signal,
@@ -1385,7 +1447,7 @@ export async function fetchPageText(
     if (rawResult.error === null) {
       const out = renderBody(rawResult.body, rawResult.contentType);
       await persistCache(url, rawResult.body, rawResult.contentType, useCache);
-      return truncatePageText(out, maxChars);
+      return { text: truncatePageText(out, maxChars), hint: null };
     }
   }
   const readmeApiUrl = githubRepoReadmeApiUrl(url);
@@ -1401,7 +1463,7 @@ export async function fetchPageText(
     if (apiBody.trim()) {
       const rendered = `README of ${url} (fetched via the GitHub README API):\n\n` + apiBody;
       await persistCache(url, rendered, "text/markdown", useCache);
-      return truncatePageText(rendered, maxChars);
+      return { text: truncatePageText(rendered, maxChars), hint: null };
     }
     const rawReadmeUrl = githubRepoRawReadmeUrl(url);
     if (rawReadmeUrl) {
@@ -1410,7 +1472,7 @@ export async function fetchPageText(
       if (rawBody.trim()) {
         const rendered = `README of ${url} (fetched via the GitHub raw README URL):\n\n` + rawBody;
         await persistCache(url, rendered, "text/markdown", useCache);
-        return truncatePageText(rendered, maxChars);
+        return { text: truncatePageText(rendered, maxChars), hint: null };
       }
     }
   }
@@ -1425,7 +1487,7 @@ export async function fetchPageText(
             let cachedOut = renderBody(cached.body, cached.contentType);
             if (!isFresh(cached, now())) cachedOut += staleNotice(cached);
             else cachedOut += "\n\n*Served from cache — network fetch failed*";
-            return truncatePageText(cachedOut, maxChars);
+            return { text: truncatePageText(cachedOut, maxChars), hint: null };
           }
         } catch {}
       }
@@ -1437,14 +1499,19 @@ export async function fetchPageText(
             const ts = wb.timestamp ? `${wb.timestamp.slice(0, 4)}-${wb.timestamp.slice(4, 6)}-${wb.timestamp.slice(6, 8)}` : "unknown date";
             out = `*Fetched from Wayback Machine snapshot (${ts}) for ${originalUrl}:*\n\n` + out;
             await persistCache(originalUrl, wb.body, wb.contentType, useCache);
-            return truncatePageText(out, maxChars);
+            return { text: truncatePageText(out, maxChars), hint: null };
           }
         } catch {}
       }
     }
-    return result.error;
+    return { text: result.error, hint: null };
   }
   const finalOut = renderBody(result.body, result.contentType);
+  const hint = isHtmlContent(result.body, result.contentType) ? needsRenderHint(result.body, finalOut) : null;
   await persistCache(originalUrl, result.body, result.contentType, useCache);
-  return truncatePageText(finalOut, maxChars);
+  return { text: truncatePageText(finalOut, maxChars), hint };
+}
+
+export async function fetchPageText(url: string, options: FetchPageOptions = {}): Promise<string> {
+  return (await fetchPageOutcome(url, options)).text;
 }

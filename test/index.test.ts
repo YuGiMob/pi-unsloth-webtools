@@ -5,9 +5,8 @@ import { join } from "node:path";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import registerExtension, { createWebTools } from "../index.ts";
-import type { FetchPageOptions } from "../web-fetch.ts";
+import type { FetchPageOptions, RenderHint } from "../web-fetch.ts";
 import type { WebSearchOptions } from "../web-search.ts";
-import type { RenderPageOptions } from "../web-render.ts";
 import { readConfig, writeConfig } from "../config.ts";
 import { testTheme, waitFor, withTempConfig } from "./config-helpers.ts";
 
@@ -56,34 +55,41 @@ function makeHarness(initialActive: string[]): Harness {
 
 describe("extension registration", () => {
   it("registers the web tools and the webtools-config command", () => {
-    const harness = makeHarness(["read", "web_render"]);
-    expect(harness.tools).toEqual(["web_search", "web_fetch", "web_render"]);
+    const harness = makeHarness(["read", "web_fetch"]);
+    expect(harness.tools).toEqual(["web_search", "web_fetch"]);
     expect([...harness.commands.keys()]).toEqual(["webtools-config"]);
-    expect(harness.commands.get("webtools-config")?.description).toContain("web_render");
+    expect(harness.commands.get("webtools-config")?.description).toContain("JavaScript");
   });
 });
 
 describe("web render config", () => {
-  it("deactivates web_render on session start when disabled", async () => {
+  it("warns about a corrupt config on session start without touching tools", async () => {
+    await withTempConfig(async (dir) => {
+      await mkdir(join(dir, ".config", "pi-unsloth-webtools"), { recursive: true });
+      await writeFile(join(dir, ".config", "pi-unsloth-webtools", "config.json"), JSON.stringify([1, 2]));
+      const harness = makeHarness(["read", "web_search", "web_fetch"]);
+      const notices: { message: string; level: string }[] = [];
+      await harness.handlers.get("session_start")?.(
+        {},
+        { hasUI: true, ui: { notify: (message: string, level: string) => notices.push({ message, level }) } },
+      );
+      expect(harness.active()).toEqual(["read", "web_search", "web_fetch"]);
+      expect(notices[0]?.level).toBe("warning");
+    });
+  });
+
+  it("keeps tools active on session start when rendering is disabled", async () => {
     await withTempConfig(async () => {
       await writeConfig({ webRenderEnabled: false });
-      const harness = makeHarness(["read", "web_search", "web_fetch", "web_render"]);
+      const harness = makeHarness(["read", "web_search", "web_fetch"]);
       await harness.handlers.get("session_start")?.({}, { hasUI: false });
       expect(harness.active()).toEqual(["read", "web_search", "web_fetch"]);
     });
   });
 
-  it("keeps web_render active on session start when enabled", async () => {
+  it("toggles rendering through the config command", async () => {
     await withTempConfig(async () => {
-      const harness = makeHarness(["read", "web_search", "web_fetch", "web_render"]);
-      await harness.handlers.get("session_start")?.({}, { hasUI: false });
-      expect(harness.active()).toEqual(["read", "web_search", "web_fetch", "web_render"]);
-    });
-  });
-
-  it("toggles web_render through the config command", async () => {
-    await withTempConfig(async () => {
-      const harness = makeHarness(["read", "web_search", "web_fetch", "web_render"]);
+      const harness = makeHarness(["read", "web_search", "web_fetch"]);
       let overlay: { handleInput(data: string): void } | undefined;
       const ctx = {
         hasUI: true,
@@ -101,11 +107,9 @@ describe("web render config", () => {
       await harness.commands.get("webtools-config")?.handler("", ctx);
       expect(overlay).toBeDefined();
       overlay?.handleInput(" ");
-      await waitFor(async () => (await readConfig()).webRenderEnabled === false && !harness.active().includes("web_render"));
-      expect(harness.active()).not.toContain("web_render");
+      await waitFor(async () => (await readConfig()).webRenderEnabled === false);
       overlay?.handleInput(" ");
-      await waitFor(async () => (await readConfig()).webRenderEnabled === true && harness.active().includes("web_render"));
-      expect(harness.active()).toContain("web_render");
+      await waitFor(async () => (await readConfig()).webRenderEnabled === true);
     });
   });
 });
@@ -231,12 +235,12 @@ describe("http 403 fallback", () => {
     return content?.[0]?.text ?? "";
   }
 
-  it("falls back to web_render when web_fetch is refused with 403", async () => {
+  it("falls back through the Jina Reader when web_fetch is refused with 403", async () => {
     const fetchPageText = vi.fn(async () => FORBIDDEN);
     const renderPageText = vi.fn(async () => "Title: Blocked\n\nRendered body text.");
     const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
     const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
-    expect(renderPageText).toHaveBeenCalledWith("https://example.com/bot", expect.objectContaining({ timeoutMs: 60000 }));
+    expect(renderPageText).toHaveBeenCalledWith("https://example.com/bot", expect.objectContaining({ timeoutMs: expect.any(Number) }));
     const text = textOf(result);
     expect(text).toContain("rendered via the Jina Reader instead");
     expect(text).toContain("Rendered body text.");
@@ -251,7 +255,7 @@ describe("http 403 fallback", () => {
     expect(textOf(result)).toContain("Rendered body text.");
   });
 
-  it("keeps the 403 when web_render is disabled", async () => {
+  it("keeps the 403 when rendering is disabled", async () => {
     const fetchPageText = vi.fn(async () => FORBIDDEN);
     const renderPageText = vi.fn(async () => "Rendered body text.");
     const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => false });
@@ -290,44 +294,58 @@ describe("http 403 fallback", () => {
   });
 });
 
-describe("web_render tool", () => {
-  it("renders the url with maxChars and timeoutMs and reports progress", async () => {
-    const renderPageText = vi.fn(async (_url: string, _options?: RenderPageOptions) => "rendered");
-    const { webRenderTool } = createWebTools({ renderPageText });
-    const updates: string[] = [];
-    const result = await webRenderTool.execute(
-      "id",
-      { url: "https://example.com/", maxChars: 50, timeoutMs: 3000 },
-      undefined,
-      (update) => updates.push(firstText(update)),
-      {} as never,
-    );
-    expect(renderPageText).toHaveBeenCalledWith(
-      "https://example.com/",
-      expect.objectContaining({ maxChars: 50, timeoutMs: 3000 }),
-    );
-    expect(result.content[0]).toMatchObject({ type: "text", text: "rendered" });
-    expect(updates).toEqual(["Rendering https://example.com/..."]);
+describe("javascript render fallback", () => {
+  const HINT: RenderHint = { reason: "js-shell", evidence: ["spa-markers"] };
+
+  function textOf(result: unknown): string {
+    const content = (result as { content?: { text?: string }[] } | undefined)?.content;
+    return content?.[0]?.text ?? "";
+  }
+
+  it("renders a thin javascript page automatically", async () => {
+    const fetchPageOutcome = vi.fn(async () => ({ text: "(page returned no readable text)", hint: HINT }));
+    const renderPageText = vi.fn(async () => "Title: App\n\n" + "Rendered body text. ".repeat(20));
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderPageText, webRenderEnabled: async () => true });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/app" }, undefined, undefined, {} as never);
+    expect(renderPageText).toHaveBeenCalledWith("https://example.com/app", expect.objectContaining({ timeoutMs: expect.any(Number) }));
+    expect(textOf(result)).toContain("rendered via the Jina Reader instead");
+    expect(textOf(result)).toContain("Rendered body text.");
   });
 
-  it("reads the jina api key from settings", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-unsloth-render-"));
-    const previousEnv = process.env.PI_CODING_AGENT_DIR;
-    try {
-      await writeFile(join(root, "settings.json"), JSON.stringify({ unslothWebTools: { jinaApiKey: "secret" } }));
-      process.env.PI_CODING_AGENT_DIR = root;
-      const renderPageText = vi.fn(async (_url: string, _options?: RenderPageOptions) => "rendered");
-      const { webRenderTool } = createWebTools({ renderPageText });
-      await webRenderTool.execute("id", { url: "https://example.com/" }, undefined, undefined, {} as never);
-      expect(renderPageText).toHaveBeenCalledWith(
-        "https://example.com/",
-        expect.objectContaining({ apiKey: "secret" }),
-      );
-    } finally {
-      if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
-      else process.env.PI_CODING_AGENT_DIR = previousEnv;
-      await rm(root, { recursive: true, force: true });
-    }
+  it("appends the incomplete note when rendering is disabled", async () => {
+    const fetchPageOutcome = vi.fn(async () => ({ text: "Title: App", hint: HINT }));
+    const renderPageText = vi.fn(async () => "Rendered body text.");
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderPageText, webRenderEnabled: async () => false });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/app" }, undefined, undefined, {} as never);
+    expect(renderPageText).not.toHaveBeenCalled();
+    expect(textOf(result)).toContain("(JavaScript-rendered page; content may be incomplete)");
+  });
+
+  it("keeps the fetched text when rendering is not richer", async () => {
+    const fetchPageOutcome = vi.fn(async () => ({ text: "x".repeat(200), hint: HINT }));
+    const renderPageText = vi.fn(async () => "x".repeat(100));
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderPageText, webRenderEnabled: async () => true });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/app" }, undefined, undefined, {} as never);
+    expect(textOf(result)).toContain("(JavaScript-rendered page; content may be incomplete)");
+    expect(textOf(result).startsWith("x".repeat(200))).toBe(true);
+  });
+
+  it("renders in web_search url mode", async () => {
+    const fetchPageOutcome = vi.fn(async () => ({ text: "(page returned no readable text)", hint: HINT }));
+    const renderPageText = vi.fn(async () => "Rendered body text that is long enough. ".repeat(5));
+    const { webSearchTool } = createWebTools({ fetchPageOutcome, renderPageText, webRenderEnabled: async () => true });
+    const result = await webSearchTool.execute("id", { url: "https://example.com/app" }, undefined, undefined, {} as never);
+    expect(renderPageText).toHaveBeenCalledTimes(1);
+    expect(textOf(result)).toContain("rendered via the Jina Reader instead");
+  });
+
+  it("does not render when the fetch looks complete", async () => {
+    const fetchPageOutcome = vi.fn(async () => ({ text: "Full page text.", hint: null }));
+    const renderPageText = vi.fn(async () => "Rendered body text.");
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderPageText, webRenderEnabled: async () => true });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/" }, undefined, undefined, {} as never);
+    expect(renderPageText).not.toHaveBeenCalled();
+    expect(textOf(result)).toBe("Full page text.");
   });
 });
 
@@ -337,7 +355,7 @@ describe("tool call rendering", () => {
     bold: (text: string) => text,
   } as unknown as Theme;
 
-  const { webSearchTool, webFetchTool, webRenderTool } = createWebTools();
+  const { webSearchTool, webFetchTool } = createWebTools();
 
   it("shows the search query", () => {
     expect(callText(webSearchTool.renderCall?.({ query: "unsloth studio" }, plainTheme, {} as never))).toBe(
@@ -354,12 +372,6 @@ describe("tool call rendering", () => {
   it("shows the fetched url", () => {
     expect(callText(webFetchTool.renderCall?.({ url: "https://example.com/" }, plainTheme, {} as never))).toBe(
       "web_fetch https://example.com/",
-    );
-  });
-
-  it("shows the rendered url", () => {
-    expect(callText(webRenderTool.renderCall?.({ url: "https://example.com/" }, plainTheme, {} as never))).toBe(
-      "web_render https://example.com/",
     );
   });
 
@@ -390,7 +402,6 @@ describe("tool call rendering", () => {
       webSearchTool.renderCall?.({ query: long }, plainTheme, {} as never),
       webSearchTool.renderCall?.({ url: `https://example.com/${long}` }, plainTheme, {} as never),
       webFetchTool.renderCall?.({ url: `https://example.com/${long}` }, plainTheme, {} as never),
-      webRenderTool.renderCall?.({ url: `https://example.com/${long}` }, plainTheme, {} as never),
     ];
     for (const component of components) {
       const line = component?.render(40)[0] ?? "";

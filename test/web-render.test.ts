@@ -71,7 +71,7 @@ describe("renderPageText", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     for (const target of ["file:///tmp/page.html", "/etc/hosts", "~/notes.txt", "./page.html"]) {
-      expect(await renderPageText(target)).toBe("Blocked: web_render cannot fetch local files.");
+      expect(await renderPageText(target)).toBe("Blocked: the Jina Reader cannot fetch local files.");
     }
     expect(fetchMock).not.toHaveBeenCalled();
     expect(dnsLookupMock).not.toHaveBeenCalled();

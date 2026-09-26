@@ -31,7 +31,7 @@ describe("WebToolsConfigOverlay", () => {
       await overlay.load();
       const text = overlay.render(60).join("\n");
       expect(text).toContain("Web Tools Config");
-      expect(text).toContain("Web render");
+      expect(text).toContain("JavaScript rendering");
       expect(text).toContain("[x]");
     });
   });

@@ -6,7 +6,7 @@ const DEFAULT_RENDER_TIMEOUT_MS = 60_000;
 const JINA_READER_URL = "https://r.jina.ai/";
 const CANCELLED_MESSAGE = "Failed to render URL: cancelled.";
 const TIMED_OUT_MESSAGE = "Failed to render URL: timed out.";
-const LOCAL_FILE_MESSAGE = "Blocked: web_render cannot fetch local files.";
+const LOCAL_FILE_MESSAGE = "Blocked: the Jina Reader cannot fetch local files.";
 const EMPTY_READER_MESSAGE = "Failed to render URL: the Jina Reader returned no content.";
 
 export interface RenderPageOptions {
