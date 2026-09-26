@@ -26,7 +26,7 @@ pi install /path/to/pi-unsloth-webtools
 
 ## What it does
 
-Both tools display their target in the TUI tool row: `web_search "query"`, `web_search <url>` in url mode, and `web_fetch <url>`.
+Both tools display their target in the TUI tool row: `web_search "query"` and `web_fetch <url>`.
 
 ### web_search
 
@@ -41,9 +41,6 @@ Mirrors Unsloth Studio's `web_search` tool:
   re-ranking. Formats results identically: `Title:` / `URL:` /
   `Snippet:` blocks separated by `---`, ending with the hint to call `web_fetch` to
   read a full page.
-- Accepts an optional `url` parameter; when given, fetches that page's text instead of
-  searching (optionally truncated with `maxChars`). An HTTP 403 on that fetch, like a page that
-  looks JavaScript-rendered, retries through the Jina Reader automatically when rendering is enabled.
 - Rate-limit, timeout, and empty-result messages mirror Studio's `_search_failure_message`.
 - Transient engine failures (network errors or null responses) are retried once with a short
   backoff inside the same timeout budget (a retry that cannot fit in the remaining budget is
@@ -83,7 +80,7 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   fetch; the deadline abort cuts a retry short when no budget remains.
 - Proxy environment variables are honored when they name a SOCKS5 proxy: `HTTPS_PROXY` /
   `HTTP_PROXY` / `ALL_PROXY` (with `NO_PROXY` exclusions) tunnel the pinned connection, so a
-  Tor-mode agent routes `web_fetch` and `web_search` url mode through its exit. `socks5h` is
+  Tor-mode agent routes `web_fetch` through its exit. `socks5h` is
   treated like `socks5`: the host is resolved locally for the guard and the pinned IP is what the
   proxy connects to. Other proxy schemes are ignored (direct connection).
 - GitHub repo root pages are rewritten to the unauthenticated README API
@@ -116,7 +113,7 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   with link-density header stripping; boilerplate-line removal.
 - No page-size budget: fetched pages and PDFs are returned in full (Studio's window-aware
   cap is deliberately dropped; the optional `maxChars` parameter still truncates when given,
-  on `web_fetch` and on `web_search`'s url mode).
+  on `web_fetch`).
   The 512 KiB / 10 MiB download caps still bound the raw fetch.
 - HTML entity decoding replicates CPython's `html.unescape` (full 2,231-entry HTML5 table,
   longest-prefix rule, Windows-1252 numeric mappings), matching Studio byte-for-byte.
@@ -135,7 +132,7 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 
 ### JavaScript rendering
 
-`web_fetch` and `web_search` url mode retry through the third-party Jina Reader (`r.jina.ai`) when
+`web_fetch` retries through the third-party Jina Reader (`r.jina.ai`) when
 a direct fetch is refused with HTTP 403 or returns a page that looks JavaScript-rendered (thin
 converted text plus SPA markers, script-heavy markup, a noscript body, or a description meta tag):
 
@@ -231,7 +228,7 @@ the current Tor exit, and Jina rate-limits keyless Reader requests per outgoing 
 pi install npm:pi-unsloth-webtools npm:pi-tor-proxy
 ```
 
-`web_fetch` and `web_search` url mode also route: they resolve and pin the target IP, then tunnel
+`web_fetch` also routes: it resolves and pins the target IP, then tunnels
 the connection through the SOCKS5 proxy named by `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` (with
 `NO_PROXY` exclusions, so localhost and local files stay direct). DNS is still resolved locally for
 the SSRF guard, and the proxy connects to that pinned IP.
@@ -260,12 +257,12 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | Key | Default | Description |
 |---|---|---|
 | `unslothWebTools.maxResults` | `5` | Default `maxResults` for `web_search` (clamped 1-20) |
-| `unslothWebTools.maxChars` / `webFetch.maxChars` / `smartFetchDefaultMaxChars` | tool param | Default `maxChars` for `web_fetch` and `web_search` url mode |
-| `unslothWebTools.timeoutMs` / `webFetch.timeoutMs` / `smartFetchDefaultTimeoutMs` | `60000` fetch, `300000` search | Default `timeoutMs` when the tool param is absent (>=1000). Fetch and `web_search` url mode fall back to 60000; `web_search` query mode falls back to 300000 |
+| `unslothWebTools.maxChars` / `webFetch.maxChars` / `smartFetchDefaultMaxChars` | tool param | Default `maxChars` for `web_fetch` |
+| `unslothWebTools.timeoutMs` / `webFetch.timeoutMs` / `smartFetchDefaultTimeoutMs` | `60000` fetch, `300000` search | Default `timeoutMs` when the tool param is absent (>=1000). Fetch falls back to 60000; `web_search` query mode falls back to 300000 |
 | `webSearch.maxResults` / `smartWebSearch.resultsPerQuery` | same as above | Legacy aliases for `maxResults` |
 | `websitePolicy` | none | Not read from settings. Tools run unrestricted by default; `websitePolicy` is a programmatic option the host passes to `webSearch` / `fetchPageText` |
 | `unslothWebTools.allowPrivateAddresses` / `webFetch.allowPrivateAddresses` | `true` | Opt out to restore the resolved-IP SSRF guard: private/loopback/link-local hosts (localhost, LAN IPs) are refused again. Non-canonical numeric IP encodings stay blocked either way |
-| `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` and `web_search` url mode (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
+| `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
 | `unslothWebTools.jinaApiKey` / `webRender.jinaApiKey` | none (`JINA_API_KEY` fallback) | API key for automatic Jina Reader rendering; raises its rate limits. Settings keys win over the environment variable |
 
 ### Settings window
@@ -282,7 +279,7 @@ first changed:
 
 | Key | Default | Description |
 |---|---|---|
-| `webRenderEnabled` | `true` | When `false`, automatic Jina Reader rendering is disabled: HTTP 403 and JavaScript-page escalation in `web_fetch` and `web_search` url mode no longer run |
+| `webRenderEnabled` | `true` | When `false`, automatic Jina Reader rendering is disabled: HTTP 403 and JavaScript-page escalation in `web_fetch` no longer run |
 
 On non-Windows platforms the directory honors `XDG_CONFIG_HOME` when set (falling back to
 `~/.config`); on Windows it always uses `~/.config`.

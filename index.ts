@@ -64,18 +64,6 @@ const WebSearchParams = Type.Object({
   query: Type.Optional(
     Type.String({ description: "The search query" }),
   ),
-  url: Type.Optional(
-    Type.String({
-      description:
-        "A URL to fetch full page content from (instead of searching). Use this to read a page found in search results.",
-    }),
-  ),
-  maxChars: Type.Optional(
-    Type.Number({
-      description:
-        "Truncate the fetched page to this many characters (only used with the url parameter)",
-    }),
-  ),
   maxResults: Type.Optional(
     Type.Number({
       minimum: 1,
@@ -157,40 +145,17 @@ export function createWebTools(deps: WebToolsDeps = {}) {
       name: "web_search",
       label: "Web Search",
       description:
-        "Search the web and return snippets for the top results. Pass url instead of query to read a page found in the same search; use web_fetch for known URLs.",
+        "Search the web and return snippets for the top results. Use web_fetch to read a page found in the results.",
       promptSnippet: "Search the web and return snippets",
       promptGuidelines: [
         "Web tool order: web_search to discover, then web_fetch to read a page.",
       ],
       parameters: WebSearchParams,
       renderCall(args, theme) {
-        const url = collapsedArg(args.url);
         const query = collapsedArg(args.query);
-        return toolCallLine(theme, "web_search", url || (query ? `"${query}"` : ""));
+        return toolCallLine(theme, "web_search", query ? `"${query}"` : "");
       },
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {
-        if (params.url?.trim()) {
-          const url = params.url.trim();
-          onUpdate?.({ content: [{ type: "text", text: `Fetching ${url}...` }], details: {} });
-          const cwd = (_ctx as ExtensionContext | undefined)?.cwd;
-          const { timeoutMs, maxChars, allowPrivateAddresses, allowLocalFiles } = await fetchDefaults(cwd, params);
-          const deadlineMs = Date.now() + timeoutMs;
-          const outcome = await fetchOutcome(url, {
-            timeoutMs,
-            deadlineMs,
-            signal: signal ?? undefined,
-            maxChars,
-            allowPrivateAddresses,
-            allowLocalFiles,
-          });
-          const rendered = await renderFallback(url, outcome, {
-            timeoutMs: Math.max(1, deadlineMs - Date.now()),
-            maxChars,
-            signal: signal ?? undefined,
-            cwd,
-          });
-          return { content: [{ type: "text", text: rendered ?? outcome.text }], details: {} };
-        }
         onUpdate?.({ content: [{ type: "text", text: "Searching the web..." }], details: {} });
         const timeoutParam = positiveNumber(params.timeoutMs);
         const searchCwd = (_ctx as ExtensionContext | undefined)?.cwd;

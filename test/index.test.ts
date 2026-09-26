@@ -115,27 +115,6 @@ describe("web render config", () => {
 });
 
 describe("web_search tool", () => {
-  it("fetches the url in url mode with maxChars and timeoutMs", async () => {
-    const fetchPageText = vi.fn(
-      async (_url: string, _options?: FetchPageOptions) => "page text",
-    );
-    const { webSearchTool } = createWebTools({ fetchPageText });
-    const updates: string[] = [];
-    const result = await webSearchTool.execute(
-      "id",
-      { url: " https://example.com/doc ", maxChars: 100, timeoutMs: 5000 },
-      undefined,
-      (update) => updates.push(firstText(update)),
-      {} as never,
-    );
-    expect(fetchPageText).toHaveBeenCalledWith(
-      "https://example.com/doc",
-      expect.objectContaining({ maxChars: 100, timeoutMs: 5000 }),
-    );
-    expect(result.content[0]).toMatchObject({ type: "text", text: "page text" });
-    expect(updates).toEqual(["Fetching https://example.com/doc..."]);
-  });
-
   it("searches in query mode with maxResults and timeoutMs", async () => {
     const webSearch = vi.fn(
       async (_query: string | undefined, _options?: WebSearchOptions) => "results",
@@ -154,23 +133,6 @@ describe("web_search tool", () => {
       maxResults: 10,
     });
     expect(result.content[0]).toMatchObject({ type: "text", text: "results" });
-  });
-
-  it("drops non-positive option values and keeps the default timeout", async () => {
-    const fetchPageText = vi.fn(
-      async (_url: string, _options?: FetchPageOptions) => "page text",
-    );
-    const { webSearchTool } = createWebTools({ fetchPageText });
-    await webSearchTool.execute(
-      "id",
-      { url: "https://example.com/", maxChars: 0, timeoutMs: -5 },
-      undefined,
-      undefined,
-      {} as never,
-    );
-    const options = fetchPageText.mock.calls[0][1] as FetchPageOptions;
-    expect(options.maxChars).toBeUndefined();
-    expect(options.timeoutMs).toBe(60000);
   });
 });
 
@@ -192,6 +154,21 @@ describe("web_fetch tool", () => {
     );
     expect(result.content[0]).toMatchObject({ type: "text", text: "body" });
     expect(updates).toEqual(["Fetching https://example.com/..."]);
+  });
+
+  it("drops non-positive option values and keeps the default timeout", async () => {
+    const fetchPageText = vi.fn(async (_url: string, _options?: FetchPageOptions) => "body");
+    const { webFetchTool } = createWebTools({ fetchPageText });
+    await webFetchTool.execute(
+      "id",
+      { url: "https://example.com/", maxChars: 0, timeoutMs: -5 },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const options = fetchPageText.mock.calls[0][1] as FetchPageOptions;
+    expect(options.maxChars).toBeUndefined();
+    expect(options.timeoutMs).toBe(60000);
   });
 
   it("passes the local access settings to the fetch", async () => {
@@ -244,15 +221,6 @@ describe("http 403 fallback", () => {
     const text = textOf(result);
     expect(text).toContain("rendered via the Jina Reader instead");
     expect(text).toContain("Rendered body text.");
-  });
-
-  it("falls back in web_search url mode", async () => {
-    const fetchPageText = vi.fn(async () => FORBIDDEN);
-    const renderPageText = vi.fn(async () => "Rendered body text.");
-    const { webSearchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
-    const result = await webSearchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
-    expect(renderPageText).toHaveBeenCalledTimes(1);
-    expect(textOf(result)).toContain("Rendered body text.");
   });
 
   it("keeps the 403 when rendering is disabled", async () => {
@@ -330,15 +298,6 @@ describe("javascript render fallback", () => {
     expect(textOf(result).startsWith("x".repeat(200))).toBe(true);
   });
 
-  it("renders in web_search url mode", async () => {
-    const fetchPageOutcome = vi.fn(async () => ({ text: "(page returned no readable text)", hint: HINT }));
-    const renderPageText = vi.fn(async () => "Rendered body text that is long enough. ".repeat(5));
-    const { webSearchTool } = createWebTools({ fetchPageOutcome, renderPageText, webRenderEnabled: async () => true });
-    const result = await webSearchTool.execute("id", { url: "https://example.com/app" }, undefined, undefined, {} as never);
-    expect(renderPageText).toHaveBeenCalledTimes(1);
-    expect(textOf(result)).toContain("rendered via the Jina Reader instead");
-  });
-
   it("does not render when the fetch looks complete", async () => {
     const fetchPageOutcome = vi.fn(async () => ({ text: "Full page text.", hint: null }));
     const renderPageText = vi.fn(async () => "Rendered body text.");
@@ -360,12 +319,6 @@ describe("tool call rendering", () => {
   it("shows the search query", () => {
     expect(callText(webSearchTool.renderCall?.({ query: "unsloth studio" }, plainTheme, {} as never))).toBe(
       'web_search "unsloth studio"',
-    );
-  });
-
-  it("shows the target url in web_search url mode", () => {
-    expect(callText(webSearchTool.renderCall?.({ url: "https://example.com/doc" }, plainTheme, {} as never))).toBe(
-      "web_search https://example.com/doc",
     );
   });
 
@@ -400,7 +353,6 @@ describe("tool call rendering", () => {
     const long = "q".repeat(200);
     const components = [
       webSearchTool.renderCall?.({ query: long }, plainTheme, {} as never),
-      webSearchTool.renderCall?.({ url: `https://example.com/${long}` }, plainTheme, {} as never),
       webFetchTool.renderCall?.({ url: `https://example.com/${long}` }, plainTheme, {} as never),
     ];
     for (const component of components) {
