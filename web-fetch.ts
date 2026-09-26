@@ -380,7 +380,7 @@ function hasSingleByteTextEvidence(data: Buffer): boolean {
   return ascii / data.length >= MIN_SINGLE_BYTE_ASCII_RATIO;
 }
 
-const CHARSET_ALIASES: Record<string, string> = {
+const CHARSET_ALIASES: Record<string, string> = Object.assign(Object.create(null), {
   gbk: "gbk",
   gb2312: "gbk",
   "gb-2312": "gbk",
@@ -406,7 +406,7 @@ const CHARSET_ALIASES: Record<string, string> = {
   "windows-874": "windows-874",
   cp874: "windows-874",
   "tis-620": "tis-620",
-};
+});
 
 function normalizeCharset(name: string): string | null {
   const n = name.trim().replace(/["']/g, "").toLowerCase();
@@ -1198,7 +1198,7 @@ interface PageMeta {
   description: string;
 }
 
-const META_KEYS: Record<string, keyof PageMeta> = {
+const META_KEYS: Record<string, keyof PageMeta> = Object.assign(Object.create(null), {
   author: "author",
   "article:author": "author",
   "dc.creator": "author",
@@ -1210,7 +1210,7 @@ const META_KEYS: Record<string, keyof PageMeta> = {
   "application-name": "site",
   description: "description",
   "og:description": "description",
-};
+});
 
 function cutAtCharBoundary(text: string, maxChars: number): string {
   const sliced = text.slice(0, maxChars);
@@ -1356,6 +1356,13 @@ function localFileFailure(err: unknown): string {
   return `Failed to read file: ${err instanceof Error ? err.message : String(err)}`;
 }
 
+const HTML_FILE_EXTENSIONS = new Set([".htm", ".html", ".xht", ".xhtml"]);
+
+function localFileContentType(filePath: string): string {
+  const dot = filePath.lastIndexOf(".");
+  return dot !== -1 && HTML_FILE_EXTENSIONS.has(filePath.slice(dot).toLowerCase()) ? "text/html" : "";
+}
+
 async function readLocalFile(
   filePath: string,
   options: { signal?: AbortSignal; maxChars?: number; maxBytes?: number; maxPdfBytes?: number },
@@ -1398,7 +1405,7 @@ async function readLocalFile(
     }
     const text = decodeWithCodec(body, bomCodecFor(body) ?? "utf-8");
     if (looksBinary(text)) return `(binary content, ${body.length} bytes; not readable as text)`;
-    return truncatePageText(withTruncation(renderBody(text, ""), truncated), options.maxChars);
+    return truncatePageText(withTruncation(renderBody(text, localFileContentType(filePath)), truncated), options.maxChars);
   } finally {
     await handle.close().catch(() => {});
   }

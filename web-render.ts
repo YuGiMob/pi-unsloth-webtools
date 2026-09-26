@@ -74,7 +74,7 @@ export async function renderPageText(url: string, options: RenderPageOptions = {
   const resolved = await resolveAndValidateHost(hostname, signal, false);
   const resolutionBudget = budgetMessage(options.signal, signal);
   if (resolutionBudget !== null) return resolutionBudget;
-  if (!resolved.ok) return resolved.reason;
+  if (!resolved.ok) return resolved.reason.startsWith("Blocked:") ? resolved.reason : `Failed to render URL: ${resolved.reason}`;
   const headers: Record<string, string> = { Accept: "application/json" };
   const apiKey = options.apiKey?.trim();
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;

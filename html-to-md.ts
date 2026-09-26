@@ -66,7 +66,7 @@ const P_CLOSING_TAGS = new Set([
   "ul",
 ]);
 
-const IMPLICIT_CLOSERS: Record<string, Set<string>> = {
+const IMPLICIT_CLOSERS: Record<string, Set<string>> = Object.assign(Object.create(null), {
   p: P_CLOSING_TAGS,
   li: new Set(["li"]),
   dt: new Set(["dt", "dd"]),
@@ -76,9 +76,9 @@ const IMPLICIT_CLOSERS: Record<string, Set<string>> = {
   th: new Set(["td", "th", "tr"]),
   option: new Set(["option", "optgroup"]),
   optgroup: new Set(["optgroup"]),
-};
+});
 
-const CLOSE_BARRIERS: Record<string, Set<string>> = {
+const CLOSE_BARRIERS: Record<string, Set<string>> = Object.assign(Object.create(null), {
   li: new Set(["ul", "ol", "menu"]),
   dt: new Set(["dl"]),
   dd: new Set(["dl"]),
@@ -87,7 +87,7 @@ const CLOSE_BARRIERS: Record<string, Set<string>> = {
   th: new Set(["table"]),
   option: new Set(["select", "datalist"]),
   optgroup: new Set(["select", "datalist"]),
-};
+});
 
 const BLOCK_TAGS = new Set([
   "p",
@@ -106,7 +106,7 @@ const BLOCK_TAGS = new Set([
 ]);
 
 const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
-const INLINE_EMPHASIS: Record<string, string> = { strong: "**", b: "**", em: "*", i: "*" };
+const INLINE_EMPHASIS: Record<string, string> = Object.assign(Object.create(null), { strong: "**", b: "**", em: "*", i: "*" });
 
 const HEADER_LINK_DENSITY = 0.93;
 const HEADER_MIN_CHARS = 150;

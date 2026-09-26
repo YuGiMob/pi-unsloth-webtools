@@ -325,3 +325,25 @@ describe("raw-text scanning", () => {
     expect(out).toContain("body text");
   });
 });
+
+describe("prototype-named tags", () => {
+  it("does not crash on prototype-named open tags", () => {
+    const out = htmlToMarkdown("<body><p>one</p><toString><p>two</p></body>");
+    expect(out).toContain("one");
+    expect(out).toContain("two");
+  });
+
+  it("does not treat prototype names as close barriers", () => {
+    const out = htmlToMarkdown("<body><ul><li>first item<toString>tail</ul><p>after</p></body>");
+    expect(out).toContain("first item");
+    expect(out).toContain("tail");
+    expect(out).toContain("after");
+  });
+
+  it("does not treat prototype names as inline emphasis", () => {
+    const out = htmlToMarkdown("<body><p><strong>bold</strong> and <toString>plain</toString></p></body>");
+    expect(out).toContain("**bold**");
+    expect(out).toContain("plain");
+    expect(out).not.toContain("[native code]");
+  });
+});

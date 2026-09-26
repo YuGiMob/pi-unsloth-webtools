@@ -89,8 +89,20 @@ describe("renderPageText", () => {
     for (const [host, address, family] of cases) {
       dnsLookupMock.mockResolvedValue([{ address, family }]);
       const out = await renderPageText(`http://${host}/`);
-      expect(out).toContain("Blocked: refusing to fetch the non-public address");
+      expect(out.startsWith("Blocked: refusing to fetch the non-public address")).toBe(true);
     }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies resolution failures as render failures", async () => {
+    dnsLookupMock.mockRejectedValue(
+      Object.assign(new Error("getaddrinfo ENOTFOUND example.com"), { code: "ENOTFOUND" }),
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const out = await renderPageText("https://example.com/");
+    expect(out.startsWith("Failed to render URL:")).toBe(true);
+    expect(out).toContain("Failed to resolve host");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

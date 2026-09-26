@@ -252,6 +252,14 @@ describe("http 403 fallback", () => {
     expect(textOf(result)).toBe(FORBIDDEN);
   });
 
+  it("keeps the 403 when the render target cannot be resolved", async () => {
+    const fetchPageText = vi.fn(async () => FORBIDDEN);
+    const renderPageText = vi.fn(async () => "Failed to render URL: Failed to resolve host: getaddrinfo ENOTFOUND example.com");
+    const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
+    expect(textOf(result)).toBe(FORBIDDEN);
+  });
+
   it("does not render for other fetch failures", async () => {
     const fetchPageText = vi.fn(async () => "Failed to fetch URL: HTTP 404 Not Found");
     const renderPageText = vi.fn(async () => "Rendered body text.");

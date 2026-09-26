@@ -1,4 +1,4 @@
-export const NAMED_ENTITIES: Record<string, string> = {
+export const NAMED_ENTITIES: Record<string, string> = Object.assign(Object.create(null), {
   "AElig": "\u00c6",
   "AElig;": "\u00c6",
   "AMP": "&",
@@ -2230,7 +2230,7 @@ export const NAMED_ENTITIES: Record<string, string> = {
   "zscr;": "\ud835\udccf",
   "zwj;": "\u200d",
   "zwnj;": "\u200c",
-};
+});
 
 export const INVALID_CHARREFS: Record<number, string> = {
   0: "\ufffd",

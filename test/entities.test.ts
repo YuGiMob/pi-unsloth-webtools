@@ -44,4 +44,25 @@ describe("decodeHtmlEntities parity with html.unescape", () => {
     expect(decodeHtmlEntities("plain text")).toBe("plain text");
     expect(decodeHtmlEntities("a & b")).toBe("a & b");
   });
+
+  it("leaves object-prototype names untouched", () => {
+    for (const name of [
+      "constructor",
+      "toString",
+      "valueOf",
+      "hasOwnProperty",
+      "isPrototypeOf",
+      "propertyIsEnumerable",
+      "__defineGetter__",
+      "__proto__",
+    ]) {
+      expect(decodeHtmlEntities(`&${name};`)).toBe(`&${name};`);
+      expect(decodeHtmlEntities(`&${name}`)).toBe(`&${name}`);
+    }
+  });
+
+  it("does not decode prototype names as prefixes", () => {
+    expect(decodeHtmlEntities("&constructorx;")).toBe("&constructorx;");
+    expect(decodeHtmlEntities("&toStrings;")).toBe("&toStrings;");
+  });
 });

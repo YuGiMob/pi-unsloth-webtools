@@ -146,6 +146,22 @@ describe("local file fetching", () => {
     expect(out).not.toContain("<html");
   });
 
+  it("converts an html fragment file by extension", async () => {
+    const file = join(dir, "fragment.html");
+    await writeFile(file, "<div><h1>Fragment Title</h1><p>Readable fragment body text.</p></div>");
+    const out = await fetchPageText(file, { timeoutMs: 5000 });
+    expect(out).toContain("Fragment Title");
+    expect(out).toContain("Readable fragment body text.");
+    expect(out).not.toContain("<div>");
+  });
+
+  it("keeps non-html fragment files raw", async () => {
+    const file = join(dir, "fragment.txt");
+    await writeFile(file, "<div>raw marker</div>");
+    const out = await fetchPageText(file, { timeoutMs: 5000 });
+    expect(out).toContain("<div>raw marker</div>");
+  });
+
   it("returns a plain text file verbatim", async () => {
     const file = join(dir, "notes.txt");
     await writeFile(file, "line one\n    indented code\nline three");

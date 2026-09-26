@@ -335,6 +335,13 @@ describe("binary sniffing", () => {
     expect(out).toContain("plain text");
   });
 
+  it("ignores prototype-named meta charsets", async () => {
+    const body = Buffer.from('<html><head><meta charset="constructor"></head><body><p>你好，世界</p></body></html>', "utf8");
+    const out = await fetchWith(body, "text/html");
+    expect(out).toContain("你好，世界");
+    expect(out).not.toContain("binary content");
+  });
+
   it("does not honor meta charset on non-html bodies", async () => {
     const body = Buffer.from('<meta charset="gbk">\n你好，世界\n', "utf8");
     const out = await fetchWith(body, "text/plain");
