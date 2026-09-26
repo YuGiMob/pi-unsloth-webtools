@@ -212,6 +212,44 @@ describe("github readme rewrite", () => {
   });
 });
 
+describe("github blob rewrite", () => {
+  it("prefers the raw content url for blob pages", async () => {
+    const calls: string[] = [];
+    const rawFetch: RawFetchSeam = async (url) => {
+      calls.push(url);
+      if (url.startsWith("https://raw.githubusercontent.com/")) {
+        return { error: null, body: "# Raw Docs\n\nFresh file content.", contentType: "text/plain" };
+      }
+      return { error: null, body: "<html><body><h1>Blob chrome</h1></body></html>", contentType: "text/html" };
+    };
+    const out = await fetchPageText("https://github.com/unslothai/unsloth/blob/main/README.md", { rawFetch });
+    expect(calls).toEqual(["https://raw.githubusercontent.com/unslothai/unsloth/main/README.md"]);
+    expect(out).toContain("Fresh file content.");
+    expect(out).not.toContain("Blob chrome");
+  });
+
+  it("falls back to the blob page when the raw url fails", async () => {
+    const calls: string[] = [];
+    const rawFetch: RawFetchSeam = async (url) => {
+      calls.push(url);
+      if (url.startsWith("https://raw.githubusercontent.com/")) {
+        return { error: "Failed to fetch URL: HTTP 404 Not Found", body: "", contentType: "" };
+      }
+      return {
+        error: null,
+        body: "<html><body><article><h1>Blob Page</h1><p>Rendered blob chrome content here.</p></article></body></html>",
+        contentType: "text/html",
+      };
+    };
+    const out = await fetchPageText("https://github.com/unslothai/unsloth/blob/main/README.md", { rawFetch });
+    expect(calls).toEqual([
+      "https://raw.githubusercontent.com/unslothai/unsloth/main/README.md",
+      "https://github.com/unslothai/unsloth/blob/main/README.md",
+    ]);
+    expect(out).toContain("Blob Page");
+  });
+});
+
 describe("fetch_page_text conversion paths", () => {
   it("returns non-html bodies raw", async () => {
     const raw = "line one\n    indented code\nline three";

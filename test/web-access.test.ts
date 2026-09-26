@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   checkUrlAccess,
+  githubRawContentUrl,
   githubRepoRawReadmeUrl,
   githubRepoReadmeApiUrl,
   hostnameAllowed,
@@ -234,6 +235,53 @@ describe("githubRepoReadmeApiUrl", () => {
     ]) {
       expect(githubRepoReadmeApiUrl(url)).toBeNull();
       expect(githubRepoRawReadmeUrl(url)).toBeNull();
+    }
+  });
+});
+
+describe("githubRawContentUrl", () => {
+  it("rewrites blob and raw views to raw.githubusercontent.com", () => {
+    expect(githubRawContentUrl("https://github.com/unslothai/unsloth/blob/main/README.md")).toBe(
+      "https://raw.githubusercontent.com/unslothai/unsloth/main/README.md",
+    );
+    expect(githubRawContentUrl("https://github.com/unslothai/unsloth/raw/main/README.md")).toBe(
+      "https://raw.githubusercontent.com/unslothai/unsloth/main/README.md",
+    );
+    expect(githubRawContentUrl("https://github.com/owner/repo/blob/v1.2.3/docs/guide.md")).toBe(
+      "https://raw.githubusercontent.com/owner/repo/v1.2.3/docs/guide.md",
+    );
+    expect(githubRawContentUrl("https://github.com/owner/repo/blob/main/src/deep/nested/file.ts")).toBe(
+      "https://raw.githubusercontent.com/owner/repo/main/src/deep/nested/file.ts",
+    );
+  });
+
+  it("handles git suffixes, www hosts and fragments", () => {
+    expect(githubRawContentUrl("https://github.com/owner/repo.git/blob/main/README.md")).toBe(
+      "https://raw.githubusercontent.com/owner/repo/main/README.md",
+    );
+    expect(githubRawContentUrl("http://www.github.com/owner/repo/blob/main/file.txt")).toBe(
+      "https://raw.githubusercontent.com/owner/repo/main/file.txt",
+    );
+    expect(githubRawContentUrl("https://github.com/owner/repo/blob/main/README.md#install")).toBe(
+      "https://raw.githubusercontent.com/owner/repo/main/README.md",
+    );
+  });
+
+  it("leaves non-blob pages and malformed urls alone", () => {
+    for (const url of [
+      "https://github.com/unslothai/unsloth",
+      "https://github.com/unslothai/unsloth/tree/main/studio",
+      "https://github.com/unslothai/unsloth/edit/main/README.md",
+      "https://github.com/unslothai/unsloth/blob",
+      "https://github.com/unslothai/unsloth/blob/main",
+      "https://github.com/settings/profile/blob/main/x.md",
+      "https://github.com/topics/llm",
+      "https://example.com/owner/repo/blob/main/README.md",
+      "https://raw.githubusercontent.com/owner/repo/main/README.md",
+      "not a url",
+      "",
+    ]) {
+      expect(githubRawContentUrl(url)).toBeNull();
     }
   });
 });
