@@ -114,6 +114,8 @@ const HEADER_MAX_RENDERED_CHARS = 800;
 const MAX_HEADER_NESTING = 8;
 
 const MIN_MAIN_CONTENT_CHARS = 200;
+const LISTING_MIN_SEGMENTS = 3;
+const LISTING_DOMINANCE_RATIO = 3;
 
 export type AttrDict = Record<string, string | null>;
 
@@ -1052,23 +1054,36 @@ function render(sourceHtml: string, scopeTags: Set<string> | null, stripHeader =
   return cleanup(newRenderer(sourceHtml, scopeTags, stripHeader).out.join(""));
 }
 
-function selectMainScopeRender(sourceHtml: string, tag: string): [number, string] {
+function selectMainScopeRender(sourceHtml: string, tag: string): [number, string, boolean] {
   const renderer = newRenderer(sourceHtml, new Set([tag]), true);
   const dropped = renderer.scopeDropped;
   const headingProse = renderer.scopeHeadingProse;
   let bestLen = 0;
   let bestRender = "";
+  let bestProse = 0;
+  let secondProse = 0;
+  let qualifiers = 0;
   for (let i = 0; i < renderer.scopeSegments.length; i++) {
     const rendered = stripBoilerplateLines(cleanup(renderer.scopeSegments[i]));
     const prose = visibleChars(rendered) - headingProse[i];
     if (prose < MIN_MAIN_CONTENT_CHARS) continue;
+    qualifiers++;
+    if (prose > bestProse) {
+      secondProse = bestProse;
+      bestProse = prose;
+    } else if (prose > secondProse) {
+      secondProse = prose;
+    }
     const size = rendered.length + Math.min(dropped[i], rendered.length);
     if (size > bestLen) {
       bestLen = size;
       bestRender = rendered;
     }
   }
-  return [bestLen, bestRender];
+  const listing =
+    qualifiers >= LISTING_MIN_SEGMENTS &&
+    bestProse < LISTING_DOMINANCE_RATIO * Math.max(1, secondProse);
+  return [bestLen, bestRender, listing];
 }
 
 export function visibleChars(text: string): number {
@@ -1141,8 +1156,8 @@ export function htmlToMarkdown(sourceHtml: string, mainContent = false): string 
   sourceHtml = sourceHtml.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (mainContent) {
     for (const scopeTag of ["article", "main"]) {
-      const [length, rendered] = selectMainScopeRender(sourceHtml, scopeTag);
-      if (length >= MIN_MAIN_CONTENT_CHARS) return rendered;
+      const [length, rendered, listing] = selectMainScopeRender(sourceHtml, scopeTag);
+      if (length >= MIN_MAIN_CONTENT_CHARS && !listing) return rendered;
     }
     return stripBoilerplateLines(render(sourceHtml, null, true));
   }

@@ -347,3 +347,36 @@ describe("prototype-named tags", () => {
     expect(out).not.toContain("[native code]");
   });
 });
+
+describe("listing pages", () => {
+  const cards = (count: number) =>
+    Array.from(
+      { length: count },
+      (_, i) => `<article><h2>Story ${i}</h2><p>${"Readable summary sentence for the story. ".repeat(10)}</p></article>`,
+    ).join("");
+
+  it("keeps every card of a listing inside main", () => {
+    const out = htmlToMarkdown(`<body><nav>Skip to content</nav><main>${cards(5)}</main></body>`, true);
+    for (let i = 0; i < 5; i++) expect(out).toContain(`Story ${i}`);
+  });
+
+  it("keeps every card of a listing without a main element", () => {
+    const out = htmlToMarkdown(`<body>${cards(5)}</body>`, true);
+    for (let i = 0; i < 5; i++) expect(out).toContain(`Story ${i}`);
+  });
+
+  it("still picks a single dominant article among smaller siblings", () => {
+    const teasers = Array.from(
+      { length: 4 },
+      () => `<article><p>${"Teaser text for a related item. ".repeat(6)}</p></article>`,
+    ).join("");
+    const out = htmlToMarkdown(`<body><article><p>${"Main story body text. ".repeat(60)}</p></article>${teasers}</body>`, true);
+    expect(out).toContain("Main story body text.");
+    expect(out).not.toContain("Teaser text for a related item.");
+  });
+
+  it("does not let a two-card page be treated as a listing", () => {
+    const out = htmlToMarkdown(`<body>${cards(2)}</body>`, true);
+    expect(out).toMatch(/Story 0|Story 1/);
+  });
+});
