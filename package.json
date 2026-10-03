@@ -68,6 +68,9 @@
     "check:publint": "publint",
     "check:attw": "attw --pack"
   },
+  "dependencies": {
+    "wreq-js": "^3.2.0"
+  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.87.0",
     "@earendil-works/pi-tui": "^0.87.0",
@@ -80,7 +83,6 @@
     "publint": "^0.3.24"
   },
   "optionalDependencies": {
-    "mupdf": "^1.28.0",
-    "wreq-js": "^3.2.0"
+    "mupdf": "^1.28.0"
   }
 }

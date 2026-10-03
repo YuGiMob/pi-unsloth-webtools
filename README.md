@@ -24,6 +24,12 @@ To install from source instead:
 pi install /path/to/pi-unsloth-webtools
 ```
 
+Installing pulls one runtime dependency, `wreq-js`, whose prebuilt native binding gives `web_fetch`
+its browser-shaped TLS fingerprint. Bindings exist for Linux (x64/arm64), macOS and Windows; because
+the binding is what `--omit=optional` skips, that install gets the shim without the engine and
+`web_fetch` quietly uses the plain Node transport instead. `mupdf` (PDF text extraction) stays an
+optional dependency, and the package works without it.
+
 ## What it does
 
 Both tools display their target in the TUI tool row: `web_search "query"` and `web_fetch <url>`.
@@ -136,11 +142,13 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
 
 `web_fetch` escalates through two tiers, cheapest first:
 
-1. **Browser-fingerprint transport** (`wreq-js`, Chrome TLS/HTTP2 shape) is the default. Requests
-   are pinned to the resolved, validated IP, browser-emulation headers are left intact so the
-   fingerprint stays coherent, and redirects are handed back to the main hop loop, so every hop is
-   re-validated against the website policy. The plain Node transport takes over when the native
-   module is unavailable, when a SOCKS5 proxy is configured (traffic must keep using the tunnelling
+1. **Browser-fingerprint transport** (`wreq-js`, Chrome TLS/HTTP2 shape) is the default, and it is
+   a required dependency: it is a small native Rust module with prebuilt bindings for Linux
+   (x64/arm64, glibc and musl), macOS (x64/arm64) and Windows (x64/arm64). Requests are pinned to
+   the resolved, validated IP, browser-emulation headers are left intact so the fingerprint stays
+   coherent, and redirects are handed back to the main hop loop, so every hop is re-validated
+   against the website policy. The plain Node transport takes over when no prebuilt binding exists
+   for the platform, when a SOCKS5 proxy is configured (traffic must keep using the tunnelling
    path), or when the request fails at the connection level; a 403 from either transport triggers
    one retry through the other. `webFetch.transport` selects `tls-first` (default), `direct-first`,
    or `off`.
@@ -222,9 +230,10 @@ third-party rendering service.
 
 ## When to use alternatives
 
-This package keeps Studio's deterministic, dependency-free core pipeline and test parity with
-`unsloth/studio`, then layers local access, browser-fingerprint fetching, local rendering, and other
-Studio-independent behavior on top. The SSRF guard is real and thoroughly tested, but it is opt-in:
+This package keeps Studio's deterministic extraction and search pipeline — and its test parity with
+`unsloth/studio` — then layers browser-fingerprint fetching, local rendering, local access, and other
+Studio-independent behavior on top. Its only runtime dependency is `wreq-js` (the default transport);
+`mupdf` stays optional. The SSRF guard is real and thoroughly tested, but it is opt-in:
 `allowPrivateAddresses` defaults to `true`, and local files are readable unless `allowLocalFiles`
 is `false`. For other tradeoffs, prefer:
 
@@ -320,6 +329,7 @@ Match on the exact prefix. Do not retry blocked hosts with spelling tricks.
 | Cache fallback | `Served from cache` / `STALE cache from YYYY-MM-DD` | Network failed; output is the cached copy with its date. |
 | Wayback fallback | `Fetched from Wayback Machine snapshot (YYYY-MM-DD) for ...` | Original 404'd; output is the archived copy with its date. |
 
+| No browser-fingerprint binding | fetch behaves as if `webFetch.transport` were `direct-first` | `wreq-js` ships prebuilt bindings for Linux, macOS and Windows only; on other platforms the tier is skipped automatically |
 | No renderer available | `*(JavaScript-rendered page; content may be incomplete)*` with no local note | Install Lightpanda, or set `webRender.lightpandaPath` / `PI_LIGHTPANDA_BIN`, to render JavaScript-heavy pages locally |
 | Local renderer failed | `Failed to render URL: Lightpanda exited with code N.` | The failed tier falls through to the next one; check the binary by hand with `lightpanda fetch --dump markdown <url>` |
 | Local renderer blocked a target | `Blocked: the local renderer cannot fetch local files.` | The local browser refuses local paths by design; fetch them with `web_fetch` directly instead |
