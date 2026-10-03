@@ -174,8 +174,19 @@ third-party rendering service.
   anti-bot walls are returned as failures (the direct error, or the incomplete-content note).
 - Binary resolution: `lightpanda` on `PATH`, then `PI_LIGHTPANDA_BIN`, then
   `webRender.lightpandaPath`. Prebuilt binaries exist for Linux (glibc; musl needs a source
-  build) and macOS, plus Docker images; Windows needs WSL2. Linux builds from 0.3 on require
-  glibc 2.38 (the 0.2.x line runs on older glibc).
+  build) and macOS, plus Docker images; Windows needs WSL2.
+- Version matters: 1.0.0 renders JavaScript-heavy pages that the 0.2.x line cannot — measured on
+  the same machine, IMDb went from a 76-byte empty document to 21k characters, dribbble from 32
+  characters to 18k, and a Medium article from a challenge page to real text. Linux builds from
+  0.3 on require glibc 2.38, so older distributions are stuck on 0.2.x without the next bullet.
+- Windows has no native Lightpanda build: install it inside WSL2 and point `webRender.lightpandaCommand`
+  at `["wsl.exe", "-e", "<path inside WSL>"]`, which the renderer then drives like any other binary.
+  The same setting works for a container (`["docker", "run", "--rm", "lightpanda/browser:nightly"]`)
+  or any wrapper. `scripts/install-lightpanda.sh` prints that recipe when run outside WSL.
+- `bash scripts/install-lightpanda.sh` installs the newest stable release. When the system glibc
+  predates what the binary needs, it downloads Debian's `libc6` for the current stable suite,
+  extracts it into the install directory, and writes a launcher shim — so 1.0.0 runs on a
+  glibc 2.36 host without touching the system libraries. The script prints the path to use.
 - Disable the tier with `webRender.lightpandaEnabled: false`; `web_fetch` then stops after the
   network attempts and reports the original error.
 
@@ -299,6 +310,7 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `webFetch.transport` / `unslothWebTools.transport` | `tls-first` | Fetch transport order: `tls-first` (default), `direct-first`, or `off` to disable the browser-fingerprint transport entirely |
 | `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering |
 | `webRender.lightpandaPath` / `unslothWebTools.lightpandaPath` | `lightpanda` on `PATH` (`PI_LIGHTPANDA_BIN` fallback) | Path to the Lightpanda binary used for local rendering |
+| `webRender.lightpandaCommand` / `unslothWebTools.lightpandaCommand` | none | Command prefix that launches the renderer, for WSL (`["wsl.exe","-e","<path>"]`) or containers; overrides `lightpandaPath`. The fetch flags are appended to it |
 
 Environment overrides: `PI_UNSLOTH_CACHE_DIR` changes the fetch cache directory, `PI_UNSLOTH_WEBTOOLS_STATS` opts into append-only sweep stats JSONL, `PI_CODING_AGENT_DIR` / `PI_AGENT_DIR` change the global settings directory, and `PI_LIGHTPANDA_BIN` points at the local renderer binary. Cache entries live 1 hour and stale copies are served only after a network failure. SOCKS5 proxies named by `HTTPS_PROXY`, `HTTP_PROXY`, or `ALL_PROXY` are honored on every fetch (`NO_PROXY` exclusions apply).
 
@@ -341,6 +353,7 @@ npm run typecheck
 npm test
 npm run test:unit
 npm run test:smoke
+bash scripts/install-lightpanda.sh
 npm run compare:fetch
 npm run compare:browsers
 npm run camoufox:warmup
@@ -374,7 +387,9 @@ RSS, per-fetch latency with the browser already running, and whether a persisten
 ## Tests
 
 `npm test` runs the full suite. `npm run test:unit` skips the live-network smoke tests,
-and `npm run test:smoke` runs only those.
+`npm run test:smoke` runs only those, and `npm run test:lightpanda` drives a real Lightpanda binary
+against live pages — it is skipped unless `PI_LIGHTPANDA_E2E=1` is set (`PI_LIGHTPANDA_E2E_BIN` points
+at the binary), and CI runs it in a dedicated job after `scripts/install-lightpanda.sh`.
 
 The suite ports Unsloth Studio's own tests for these tools:
 

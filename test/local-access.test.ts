@@ -273,7 +273,7 @@ describe("fetch extras settings", () => {
     const root = await mkdtemp(join(tmpdir(), "pi-unsloth-settings-"));
     try {
       process.env.PI_CODING_AGENT_DIR = root;
-      expect(await loadLightpandaSettings()).toEqual({ enabled: true, binaryPath: null });
+      expect(await loadLightpandaSettings()).toEqual({ enabled: true, binaryPath: null, command: null });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -292,9 +292,53 @@ describe("fetch extras settings", () => {
       await mkdir(join(cwd, ".pi"), { recursive: true });
       await writeFile(join(cwd, ".pi", "settings.json"), JSON.stringify({ webRender: { lightpandaEnabled: false } }));
       process.env.PI_CODING_AGENT_DIR = agentDirPath;
-      expect(await loadLightpandaSettings(cwd)).toEqual({ enabled: false, binaryPath: "/opt/lightpanda" });
+      expect(await loadLightpandaSettings(cwd)).toEqual({ enabled: false, binaryPath: "/opt/lightpanda", command: null });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("lightpanda command settings", () => {
+  const previousEnv = process.env.PI_CODING_AGENT_DIR;
+
+  afterEach(async () => {
+    if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousEnv;
+  });
+
+  async function withSettings(value: unknown, run: () => Promise<void>): Promise<void> {
+    const root = await mkdtemp(join(tmpdir(), "pi-unsloth-lpcmd-"));
+    try {
+      await writeFile(join(root, "settings.json"), JSON.stringify({ webRender: { lightpandaCommand: value } }));
+      process.env.PI_CODING_AGENT_DIR = root;
+      await run();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("reads a command prefix, dropping non-string entries", async () => {
+    await withSettings(["wsl.exe", "-e", "/home/u/lp/lightpanda-run", 42, "", "  "], async () => {
+      expect((await loadLightpandaSettings()).command).toEqual(["wsl.exe", "-e", "/home/u/lp/lightpanda-run"]);
+    });
+  });
+
+  it("reads a container command", async () => {
+    await withSettings(["docker", "run", "--rm", "lightpanda/browser:nightly"], async () => {
+      expect((await loadLightpandaSettings()).command).toEqual(["docker", "run", "--rm", "lightpanda/browser:nightly"]);
+    });
+  });
+
+  it("leaves the command unset for empty or invalid values", async () => {
+    await withSettings([], async () => {
+      expect((await loadLightpandaSettings()).command).toBeNull();
+    });
+    await withSettings(["", 7], async () => {
+      expect((await loadLightpandaSettings()).command).toBeNull();
+    });
+    await withSettings("wsl.exe -e /home/u/lp", async () => {
+      expect((await loadLightpandaSettings()).command).toBeNull();
+    });
   });
 });

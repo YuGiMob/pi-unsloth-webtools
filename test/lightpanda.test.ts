@@ -2,7 +2,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { lightpandaBinary, renderPageWithLightpanda, type LightpandaSpawn } from "../lightpanda.ts";
+import { lightpandaBinary, lightpandaLaunch, renderPageWithLightpanda, type LightpandaSpawn } from "../lightpanda.ts";
 
 interface SpawnCall {
   binary: string;
@@ -87,7 +87,7 @@ describe("renderPageWithLightpanda", () => {
     const { spawnImpl, calls } = spawnRendering(PUBLIC_PAGE);
     const out = await renderPageWithLightpanda("https://example.com/", {
       spawn: spawnImpl,
-      settings: { enabled: false, binaryPath: null },
+      settings: { enabled: false, binaryPath: null, command: null },
     });
     expect(out).toBeNull();
     expect(calls).toEqual([]);
@@ -253,10 +253,10 @@ describe("renderPageWithLightpanda", () => {
 describe("lightpandaBinary", () => {
   it("prefers the explicit path, then settings, then the environment", () => {
     process.env.PI_LIGHTPANDA_BIN = "/env/lightpanda";
-    expect(lightpandaBinary({ binaryPath: "/explicit/lightpanda", settings: { enabled: true, binaryPath: "/settings/lightpanda" } })).toBe(
+    expect(lightpandaBinary({ binaryPath: "/explicit/lightpanda", settings: { enabled: true, binaryPath: "/settings/lightpanda", command: null } })).toBe(
       "/explicit/lightpanda",
     );
-    expect(lightpandaBinary({ settings: { enabled: true, binaryPath: "/settings/lightpanda" } })).toBe(
+    expect(lightpandaBinary({ settings: { enabled: true, binaryPath: "/settings/lightpanda", command: null } })).toBe(
       "/settings/lightpanda",
     );
     expect(lightpandaBinary({})).toBe("/env/lightpanda");
@@ -325,5 +325,45 @@ describe("metadata-only renders", () => {
       resolve: async () => ({ ok: true, reason: "", ip: "93.184.216.34", family: 4 }),
     });
     expect(out).toBe("(page returned no readable text)");
+  });
+});
+
+describe("launch command", () => {
+  it("prefers an explicit command over a binary path", () => {
+    expect(
+      lightpandaLaunch({
+        binaryPath: "/usr/bin/lightpanda",
+        command: ["wsl.exe", "-e", "/home/u/.local/bin/lightpanda"],
+      }),
+    ).toEqual(["wsl.exe", "-e", "/home/u/.local/bin/lightpanda"]);
+    expect(
+      lightpandaLaunch({ settings: { enabled: true, binaryPath: null, command: ["docker", "run", "--rm", "lightpanda/browser:nightly"] } }),
+    ).toEqual(["docker", "run", "--rm", "lightpanda/browser:nightly"]);
+    expect(lightpandaLaunch({ settings: { enabled: true, binaryPath: "/opt/lp", command: null } })).toEqual(["/opt/lp"]);
+    expect(lightpandaLaunch({ binaryPath: "/usr/bin/lightpanda" })).toEqual(["/usr/bin/lightpanda"]);
+  });
+
+  it("appends the fetch flags to a command prefix when rendering", async () => {
+    const { spawnImpl, calls } = spawnRendering(PUBLIC_PAGE);
+    const out = await renderPageWithLightpanda("https://example.com/page", {
+      command: ["wsl.exe", "-e", "/home/u/.local/bin/lightpanda"],
+      spawn: spawnImpl,
+      resolve: resolvePublic,
+    });
+    expect(out).toContain("Readable body text here.");
+    expect(calls[0].binary).toBe("wsl.exe");
+    expect(calls[0].args).toEqual(["-e", "/home/u/.local/bin/lightpanda", "version"]);
+    const fetchCall = calls.find((call) => call.args.includes("fetch"));
+    expect(fetchCall?.args.slice(0, 3)).toEqual(["-e", "/home/u/.local/bin/lightpanda", "fetch"]);
+    expect(fetchCall?.args.at(-1)).toBe("https://example.com/page");
+  });
+
+  it("returns null when the command cannot be started", async () => {
+    const { spawnImpl } = makeSpawn(() => ({ errorCode: "ENOENT" }));
+    const out = await renderPageWithLightpanda("https://example.com/", {
+      command: ["wsl.exe", "-e", "/missing/lightpanda"],
+      spawn: spawnImpl,
+    });
+    expect(out).toBeNull();
   });
 });

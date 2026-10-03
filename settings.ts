@@ -50,6 +50,23 @@ function pickBoolean(data: Record<string, unknown>, paths: string[][]): boolean 
   return undefined;
 }
 
+function pickStringArray(data: Record<string, unknown>, paths: string[][]): string[] | undefined {
+  for (const path of paths) {
+    let cur: unknown = data;
+    for (const key of path) {
+      if (cur && typeof cur === "object" && !Array.isArray(cur)) cur = (cur as Record<string, unknown>)[key];
+      else {
+        cur = undefined;
+        break;
+      }
+    }
+    if (!Array.isArray(cur)) continue;
+    const values = cur.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+    if (values.length) return values;
+  }
+  return undefined;
+}
+
 function pickString(data: Record<string, unknown>, paths: string[][]): string | undefined {
   for (const path of paths) {
     let cur: unknown = data;
@@ -110,6 +127,11 @@ const LIGHTPANDA_ENABLED_PATHS: string[][] = [
 const LIGHTPANDA_PATH_PATHS: string[][] = [
   ["unslothWebTools", "lightpandaPath"],
   ["webRender", "lightpandaPath"],
+];
+
+const LIGHTPANDA_COMMAND_PATHS: string[][] = [
+  ["unslothWebTools", "lightpandaCommand"],
+  ["webRender", "lightpandaCommand"],
 ];
 function clampMaxResults(value: number): number {
   return Math.min(20, Math.max(1, value));
@@ -188,14 +210,18 @@ export async function loadDefaultFetchSettings(cwd?: string): Promise<{
 export async function loadLightpandaSettings(cwd?: string): Promise<{
   enabled: boolean;
   binaryPath: string | null;
+  command: string[] | null;
 }> {
   let enabled = true;
   let binaryPath: string | null = null;
+  let command: string[] | null = null;
   for (const data of await settingsEntries(cwd)) {
     const e = pickBoolean(data, LIGHTPANDA_ENABLED_PATHS);
     if (e !== undefined) enabled = e;
     const p = pickString(data, LIGHTPANDA_PATH_PATHS);
     if (p !== undefined) binaryPath = p;
+    const c = pickStringArray(data, LIGHTPANDA_COMMAND_PATHS);
+    if (c !== undefined) command = c;
   }
-  return { enabled, binaryPath };
+  return { enabled, binaryPath, command };
 }

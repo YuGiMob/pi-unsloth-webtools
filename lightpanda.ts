@@ -33,6 +33,7 @@ export type LightpandaWaitUntil = "networkidle" | "load" | "domcontentloaded" | 
 export interface LightpandaSettings {
   enabled: boolean;
   binaryPath: string | null;
+  command: string[] | null;
 }
 
 interface LightpandaProcess {
@@ -56,6 +57,7 @@ export interface LightpandaRenderOptions {
   websitePolicy?: WebsitePolicy | null;
   settings?: LightpandaSettings | null;
   binaryPath?: string | null;
+  command?: string[] | null;
   dump?: LightpandaDump;
   waitUntil?: LightpandaWaitUntil;
   spawn?: LightpandaSpawn;
@@ -74,8 +76,9 @@ interface RunResult {
 
 const availability = new Map<string, Promise<boolean>>();
 
-function binaryAvailable(binary: string, spawn: LightpandaSpawn): Promise<boolean> {
-  const cached = availability.get(binary);
+function binaryAvailable(launch: string[], spawn: LightpandaSpawn): Promise<boolean> {
+  const key = launch.join(" ");
+  const cached = availability.get(key);
   if (cached) return cached;
   const probe = new Promise<boolean>((resolve) => {
     let settled = false;
@@ -93,7 +96,7 @@ function binaryAvailable(binary: string, spawn: LightpandaSpawn): Promise<boolea
     }, PROBE_TIMEOUT_MS);
     let child: LightpandaProcess;
     try {
-      child = spawn(binary, ["version"], { stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(launch[0], [...launch.slice(1), "version"], { stdio: ["ignore", "pipe", "pipe"] });
     } catch {
       finish(false);
       return;
@@ -101,12 +104,12 @@ function binaryAvailable(binary: string, spawn: LightpandaSpawn): Promise<boolea
     child.on("error", () => finish(false));
     child.on("close", (code) => finish(code === 0));
   });
-  availability.set(binary, probe);
+  availability.set(key, probe);
   return probe;
 }
 
 function runLightpanda(
-  binary: string,
+  launch: string[],
   args: string[],
   options: { timeoutMs: number; signal?: AbortSignal; spawn: LightpandaSpawn },
 ): Promise<RunResult> {
@@ -146,7 +149,7 @@ function runLightpanda(
     }, options.timeoutMs);
     let child: LightpandaProcess;
     try {
-      child = options.spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] });
+      child = options.spawn(launch[0], [...launch.slice(1), ...args], { stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       finish(error instanceof Error ? error : new Error(String(error)));
       return;
@@ -207,6 +210,12 @@ export function lightpandaBinary(options: LightpandaRenderOptions = {}): string 
   );
 }
 
+export function lightpandaLaunch(options: LightpandaRenderOptions = {}): string[] {
+  const command = options.command ?? options.settings?.command ?? null;
+  if (command && command.length) return command;
+  return [lightpandaBinary(options)];
+}
+
 export async function renderPageWithLightpanda(
   url: string,
   options: LightpandaRenderOptions = {},
@@ -219,9 +228,9 @@ export async function renderPageWithLightpanda(
   const normalized = normalizeUrlScheme(target);
   const [allowed, reason, hostname] = checkUrlAccess(normalized, policy);
   if (!allowed) return reason;
-  const binary = lightpandaBinary(options);
+  const launch = lightpandaLaunch(options);
   const spawn = options.spawn ?? (spawnProcess as unknown as LightpandaSpawn);
-  if (!(await binaryAvailable(binary, spawn))) return null;
+  if (!(await binaryAvailable(launch, spawn))) return null;
   const timeoutMs = Math.min(
     MAX_SIGNAL_TIMEOUT_MS,
     Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)),
@@ -237,7 +246,7 @@ export async function renderPageWithLightpanda(
   }
   const dump = options.dump ?? "html";
   const result = await runLightpanda(
-    binary,
+    launch,
     [
       "fetch",
       "--dump",

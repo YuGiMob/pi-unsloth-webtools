@@ -38,7 +38,8 @@
     "settings.ts",
     "agent-dir.ts",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "scripts/install-lightpanda.sh"
   ],
   "pi": {
     "extensions": [
@@ -57,6 +58,7 @@
     "test": "vitest run",
     "test:unit": "vitest run --exclude **/smoke.test.ts",
     "test:smoke": "vitest run test/smoke.test.ts",
+    "test:lightpanda": "vitest run test/lightpanda-live.test.ts",
     "compare:fetch": "node scripts/fetch-compare.ts",
     "compare:browsers": "node scripts/compare-browsers.ts",
     "camoufox:warmup": "node scripts/camoufox-warmup.ts",
