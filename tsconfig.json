@@ -18,11 +18,10 @@
   },
   "include": [
     "index.ts",
-    "config.ts",
-    "config-ui.ts",
     "web-search.ts",
     "web-fetch.ts",
-    "web-render.ts",
+    "tls-fetch.ts",
+    "lightpanda.ts",
     "web-access.ts",
     "html-to-md.ts",
     "engines.ts",
@@ -33,6 +32,7 @@
     "cache.ts",
     "settings.ts",
     "agent-dir.ts",
-    "test/**/*.ts"
+    "test/**/*.ts",
+    "scripts/**/*.ts"
   ]
 }

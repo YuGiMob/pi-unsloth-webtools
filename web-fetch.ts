@@ -23,6 +23,7 @@ import {
   stripIpv6Brackets,
   type WebsitePolicy,
 } from "./web-access.ts";
+import { impersonatedRequest, type TlsHopOptions, type TlsHopResponse } from "./tls-fetch.ts";
 import { collapseWhitespace, decodeHtmlEntities, feedHtml, htmlToMarkdown, visibleChars } from "./html-to-md.ts";
 import type { AttrDict } from "./html-to-md.ts";
 import { INVALID_CHARREFS } from "./entities.ts";
@@ -157,8 +158,8 @@ export class FetchTimeoutError extends Error {
 }
 const FETCH_CANCELLED_MESSAGE = "Failed to fetch URL: cancelled.";
 const FETCH_TIMEOUT_MESSAGE = "Failed to fetch URL: timed out.";
-const TRUNCATED_BODY_SUFFIX = "... (page truncated at the download limit)";
-const TRUNCATED_BODY_NOTICE = "\n\n" + TRUNCATED_BODY_SUFFIX;
+export const TRUNCATED_BODY_SUFFIX = "... (page truncated at the download limit)";
+export const TRUNCATED_BODY_NOTICE = "\n\n" + TRUNCATED_BODY_SUFFIX;
 
 function fetchErrorMessage(err: unknown): string {
   if (err instanceof FetchCancelledError) return FETCH_CANCELLED_MESSAGE;
@@ -188,6 +189,7 @@ export interface FetchPageOptions {
   maxBytes?: number;
   maxPdfBytes?: number;
   allowPrivateAddresses?: boolean;
+  transport?: FetchTransport;
   allowLocalFiles?: boolean;
   seams?: FetchSeams;
   rawFetch?: (url: string, options: RawFetchOptions) => Promise<RawFetchResult>;
@@ -208,9 +210,13 @@ export interface ResolvedHost {
   alternates?: { ip: string; family: number }[];
 }
 
+export type FetchTransport = "tls-first" | "direct-first" | "off";
+
+type TransportKind = "direct" | "tls";
 export interface FetchSeams {
   resolve?: (hostname: string, signal?: AbortSignal, allowPrivateAddresses?: boolean) => Promise<ResolvedHost>;
   request?: (opts: HopOptions) => Promise<HopResponse>;
+  impersonate?: (options: TlsHopOptions) => Promise<TlsHopResponse | null>;
 }
 
 export interface HopOptions {
@@ -236,6 +242,7 @@ export interface RawFetchOptions {
   maxBytes?: number;
   maxPdfBytes?: number;
   allowPrivateAddresses?: boolean;
+  transport?: FetchTransport;
   seams?: FetchSeams;
 }
 
@@ -903,6 +910,10 @@ export async function fetchUrlRaw(
   const resolveHost = seams.resolve ?? resolveAndValidateHost;
   const allowPrivateAddresses = options.allowPrivateAddresses ?? true;
   const performRequest = seams.request ?? requestHop;
+  const transportMode = options.transport ?? "tls-first";
+  const performImpersonation =
+    transportMode === "off" ? null : (seams.impersonate ?? (seams.request ? null : impersonatedRequest));
+  const directFirst = transportMode === "direct-first" || performImpersonation === null;
   const resolveWithBudget = async (hostname: string): Promise<ResolvedHost> => {
     const abortController = new AbortController();
     const waitMs = clampedRemainingMs(deadline, now);
@@ -937,6 +948,7 @@ export async function fetchUrlRaw(
   let pinnedFamily = resolved.family;
   let alternates: { ip: string; family: number }[] = resolved.alternates ?? [];
   let alternateIndex = 0;
+  const triedTransports = new Set<string>();
   const userAgent = randomUserAgent();
   for (let hop = 0; hop < MAX_REQUESTS; hop++) {
     const budgetResult = checkBudget();
@@ -960,34 +972,67 @@ export async function fetchUrlRaw(
     }
     headers["Host"] = hostHeader;
     const inactivity = remainingMs(deadline, now);
-    let response: HopResponse;
-    try {
-      response = await performRequest({
-        url: parsed,
-        pinnedIp,
-        family: pinnedFamily,
-        headers,
-        maxBytes,
-        maxPdfBytes,
-        inactivityMs: inactivity,
-        deadlineMs: deadline,
-        nowMs: now,
-        signal,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "";
-      if (message === "cancelled" || message === "timed out") return emptyResult(fetchErrorMessage(err));
-      if (
-        !(err instanceof FetchCancelledError) &&
-        !(err instanceof FetchTimeoutError) &&
-        alternateIndex < alternates.length
-      ) {
+    const order: TransportKind[] = socksProxyForUrl(parsed) !== null
+      ? ["direct"]
+      : directFirst
+        ? ["direct", "tls"]
+        : ["tls", "direct"];
+    let response: HopResponse | null = null;
+    let failure: unknown = null;
+    for (const kind of order) {
+      const key = `${kind}|${currentUrl}|${pinnedIp}`;
+      if (triedTransports.has(key)) continue;
+      triedTransports.add(key);
+      let attempt: HopResponse | null;
+      try {
+        if (kind === "tls") {
+          const impersonate = performImpersonation;
+          if (impersonate === null) continue;
+          attempt = await impersonate({
+            url: parsed,
+            pinnedIp,
+            family: pinnedFamily,
+            timeoutMs: remainingMs(deadline, now),
+            signal,
+            maxBytes,
+            maxPdfBytes,
+            extraHeaders: options.extraHeaders,
+          });
+        } else {
+          attempt = await performRequest({
+            url: parsed,
+            pinnedIp,
+            family: pinnedFamily,
+            headers,
+            maxBytes,
+            maxPdfBytes,
+            inactivityMs: inactivity,
+            deadlineMs: deadline,
+            nowMs: now,
+            signal,
+          });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "";
+        if (message === "cancelled" || message === "timed out") return emptyResult(fetchErrorMessage(err));
+        if (err instanceof FetchCancelledError || err instanceof FetchTimeoutError) {
+          return emptyResult(fetchErrorMessage(err));
+        }
+        failure = err;
+        continue;
+      }
+      if (attempt === null) continue;
+      if (response === null || (attempt.status < 400 && response.status >= 400)) response = attempt;
+      if (attempt.status < 400) break;
+    }
+    if (response === null) {
+      if (alternateIndex < alternates.length) {
         const next = alternates[alternateIndex++];
         pinnedIp = next.ip;
         pinnedFamily = next.family;
         continue;
       }
-      return emptyResult(fetchErrorMessage(err));
+      return emptyResult(fetchErrorMessage(failure ?? new Error("no transport could reach the target")));
     }
 
     if (response.status >= 300 && response.status < 400) {
@@ -1256,7 +1301,7 @@ function extractPageMeta(html: string): PageMeta {
   return meta;
 }
 
-function pagePrefixedMarkdown(html: string): string {
+export function pagePrefixedMarkdown(html: string): string {
   const meta = extractPageMeta(html);
   const lines: string[] = [];
   if (meta.title) lines.push(`Title: ${meta.title}`);
@@ -1446,6 +1491,7 @@ export async function fetchPageOutcome(
     maxBytes: options.maxBytes,
     maxPdfBytes: options.maxPdfBytes,
     seams: options.seams,
+    transport: options.transport,
   };
   const useCache = !options.seams && !options.rawFetch;
   const githubRaw = githubRawContentUrl(url);

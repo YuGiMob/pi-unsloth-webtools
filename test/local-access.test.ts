@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchPageText, fetchUrlRaw } from "../web-fetch.ts";
-import { loadDefaultFetchSettings } from "../settings.ts";
+import { loadDefaultFetchSettings, loadLightpandaSettings } from "../settings.ts";
 import { makePdf } from "./helpers.ts";
 
 const { dnsLookupMock } = vi.hoisted(() => ({ dnsLookupMock: vi.fn() }));
@@ -241,6 +241,58 @@ describe("local access settings", () => {
       const settings = await loadDefaultFetchSettings(cwd);
       expect(settings.allowPrivateAddresses).toBe(true);
       expect(settings.allowLocalFiles).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("fetch extras settings", () => {
+  const previousEnv = process.env.PI_CODING_AGENT_DIR;
+
+  afterEach(async () => {
+    if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousEnv;
+  });
+
+  it("defaults to the tls-first transport and reads it from settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-unsloth-settings-"));
+    try {
+      process.env.PI_CODING_AGENT_DIR = root;
+      expect((await loadDefaultFetchSettings()).transport).toBe("tls-first");
+      await writeFile(join(root, "settings.json"), JSON.stringify({ webFetch: { transport: "direct-first" } }));
+      expect((await loadDefaultFetchSettings()).transport).toBe("direct-first");
+      await writeFile(join(root, "settings.json"), JSON.stringify({ webFetch: { transport: "bogus" } }));
+      expect((await loadDefaultFetchSettings()).transport).toBe("tls-first");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("defaults the local renderer on with no configured path", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-unsloth-settings-"));
+    try {
+      process.env.PI_CODING_AGENT_DIR = root;
+      expect(await loadLightpandaSettings()).toEqual({ enabled: true, binaryPath: null });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the lightpanda path and toggle with project override", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-unsloth-settings-"));
+    try {
+      const agentDirPath = join(root, "agent");
+      await mkdir(agentDirPath, { recursive: true });
+      await writeFile(
+        join(agentDirPath, "settings.json"),
+        JSON.stringify({ webRender: { lightpandaPath: "/opt/lightpanda", lightpandaEnabled: true } }),
+      );
+      const cwd = join(root, "project");
+      await mkdir(join(cwd, ".pi"), { recursive: true });
+      await writeFile(join(cwd, ".pi", "settings.json"), JSON.stringify({ webRender: { lightpandaEnabled: false } }));
+      process.env.PI_CODING_AGENT_DIR = agentDirPath;
+      expect(await loadLightpandaSettings(cwd)).toEqual({ enabled: false, binaryPath: "/opt/lightpanda" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

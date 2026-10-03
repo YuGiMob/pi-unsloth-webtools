@@ -5,8 +5,8 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) extension providing `w
 ([`unslothai/unsloth`](https://github.com/unslothai/unsloth), `studio/backend/core/inference/`);
 the engine, extraction, and PDF layers are still derived from it, but the package is no longer
 behavior-identical to Studio — it enables local file and private-address fetching by default
-and adds a fetch cache, Wayback fallbacks, page metadata, automatic Jina Reader rendering, and
-other behavior Studio does not have. See
+and adds a fetch cache, Wayback fallbacks, page metadata, a browser-fingerprint retry, local
+local Lightpanda rendering, and other behavior Studio does not have.
 [Known differences from Studio](#known-differences-from-studio). The `unsloth` in the name marks
 provenance, not affiliation.
 
@@ -122,35 +122,54 @@ Port of Studio's `_fetch_page_text` / `_fetch_url_raw` pipeline:
   `Date:` (`article:published_time` / `dc.date` / `date`) and `Site:` (`og:site_name` /
   `application-name`) lines are added when declared, so the model can judge recency and
   provenance.
-- A direct fetch refused with HTTP 403 is retried through the Jina Reader automatically when
-  rendering is enabled; the rendered page is prefixed with a note saying so. When rendering is
-  disabled or the render also fails, the original `Failed to fetch URL: HTTP 403 ...` is returned.
-- Pages that look JavaScript-rendered are re-fetched through the Jina Reader the same way. When
-  rendering is disabled or does not produce more text, the page gets a
-  `*(JavaScript-rendered page; content may be incomplete)*` note, so a shell is not mistaken for
-  the whole page.
+- A direct fetch refused with HTTP 403 is retried through a browser-fingerprint transport
+  (`wreq-js`, Chrome TLS/HTTP2 shape) that keeps the pinned DNS and the website policy checks.
+  This is the default transport and clears many bot walls without a browser and without a third
+  party; opt out with `webFetch.transport: "direct-first"` or `"off"`.
+- A page that is still refused, or that looks JavaScript-rendered, is rendered locally with
+  Lightpanda when the binary is installed. There is no third-party rendering service: nothing is
+  sent anywhere except to the target itself. Bot-challenge pages are rejected, so an interstitial
+  never replaces a real render. When nothing renders, the original error or a
+  `*(JavaScript-rendered page; content may be incomplete)*` note is returned.
 
-### JavaScript rendering
+### Rendering and anti-bot tiers
 
-`web_fetch` retries through the third-party Jina Reader (`r.jina.ai`) when
-a direct fetch is refused with HTTP 403 or returns a page that looks JavaScript-rendered (thin
-converted text plus SPA markers, script-heavy markup, a noscript body, or a description meta tag):
+`web_fetch` escalates through two tiers, cheapest first:
 
-- Every target is validated and resolved locally first: http/https only, and any private,
-  loopback, link-local, or otherwise non-public address is refused. Local files are never sent,
-  regardless of `webFetch.allowPrivateAddresses` / `webFetch.allowLocalFiles`.
-- `unslothWebTools.jinaApiKey` (or `webRender.jinaApiKey`, or the `JINA_API_KEY` environment
-  variable) raises the Reader's rate limits; without a key it still works at Jina's free limits.
-- Rendered output is Markdown prefixed with `Title:` / `URL:` lines and a `Rendered via the Jina
-  Reader` provenance line; the 403 fallback prefixes a note instead. An optional `maxChars`
-  truncates, like any fetch.
-- When rendering is disabled or does not produce more text, a page that looks JavaScript-rendered
-  is returned with a `*(JavaScript-rendered page; content may be incomplete)*` note, so a shell is
-  not mistaken for the whole page.
-- Enabled by default. Disable it with `/webtools-config` (`webRenderEnabled` in
-  `~/.config/pi-unsloth-webtools/config.json`), which turns off both escalation paths.
-- Keyless Reader requests are rate-limited per outgoing IP; see
-  [Companion: rotating exit IPs](#companion-rotating-exit-ips).
+1. **Browser-fingerprint transport** (`wreq-js`, Chrome TLS/HTTP2 shape) is the default. Requests
+   are pinned to the resolved, validated IP, browser-emulation headers are left intact so the
+   fingerprint stays coherent, and redirects are handed back to the main hop loop, so every hop is
+   re-validated against the website policy. The plain Node transport takes over when the native
+   module is unavailable, when a SOCKS5 proxy is configured (traffic must keep using the tunnelling
+   path), or when the request fails at the connection level; a 403 from either transport triggers
+   one retry through the other. `webFetch.transport` selects `tls-first` (default), `direct-first`,
+   or `off`.
+2. **Local rendering** with a locally installed
+   [Lightpanda](https://github.com/lightpanda-io/browser) binary when a page is still refused or
+   looks JavaScript-rendered.
+
+There is no third tier. If a page needs a browser that the local renderer cannot provide, the
+original error (or the incomplete-content note) is returned rather than shipping the URL to a
+third-party rendering service.
+
+#### Local rendering (Lightpanda)
+
+- Runs `lightpanda fetch --dump html --wait-until networkidle --block-private-networks` and puts
+  the dump through the same Markdown pipeline as any other fetch, so titles, metadata,
+  main-content scoping and boilerplate removal match the direct path.
+- `--block-private-networks` is always passed in addition to the pre-flight resolve check, so a
+  redirect or subresource inside the browser cannot reach a private address.
+- A render is only accepted when it contains real prose, or beats the fetched text by 1.5x. A
+  non-zero exit, a timeout, or a bot-challenge page counts as a failed tier, so the next tier
+  still gets its chance.
+- Lightpanda identifies itself honestly and refuses to impersonate a browser user agent, so hard
+  anti-bot walls are returned as failures (the direct error, or the incomplete-content note).
+- Binary resolution: `lightpanda` on `PATH`, then `PI_LIGHTPANDA_BIN`, then
+  `webRender.lightpandaPath`. Prebuilt binaries exist for Linux (glibc; musl needs a source
+  build) and macOS, plus Docker images; Windows needs WSL2. Linux builds from 0.3 on require
+  glibc 2.38 (the 0.2.x line runs on older glibc).
+- Disable the tier with `webRender.lightpandaEnabled: false`; `web_fetch` then stops after the
+  network attempts and reports the original error.
 
 ## Known differences from Studio
 
@@ -159,10 +178,15 @@ converted text plus SPA markers, script-heavy markup, a noscript body, or a desc
   (`file://` URLs and absolute, `~/`, `./` paths) by default; opt out with
   `webFetch.allowPrivateAddresses: false` and `webFetch.allowLocalFiles: false` to restore
   Studio's behavior.
-- Third-party rendering: when rendering is enabled, a fetch refused with HTTP 403 or returning a
-  page that looks JavaScript-rendered is retried through the Jina Reader (`r.jina.ai`), so the
-  target URL leaves the machine. Studio has no third-party rendering path. This path always refuses
-  local files and non-public addresses, regardless of the local-access settings.
+- Browser-fingerprint retry: a 403 is retried through `wreq-js` (Chrome TLS/HTTP2 shape) before any
+  rendering, keeping the pinned IP, the website policy, and the local-file refusal rules. Studio has
+  no such path.
+- Local rendering: Lightpanda renders the page in a local browser and the dump runs through the same
+  extraction pipeline; nothing leaves the machine, and `--block-private-networks` is always passed.
+  Studio has no local rendering path.
+- No third-party rendering: Studio has no rendering path at all; this port renders refused or
+  JavaScript-heavy pages locally with Lightpanda and never sends the URL to a rendering service.
+  Local files and non-public addresses stay refused for the browser tier.
 - PDF styling: MuPDF.js exposes one font per line, so mixed-style lines style the
   whole line instead of per-span; superscript, subscript, underline, strikeout, and
   highlight markers are not emitted. Tables use a conservative text-grid detector:
@@ -185,8 +209,8 @@ converted text plus SPA markers, script-heavy markup, a noscript body, or a desc
 - Proxies: Studio routes through environment proxies; this port resolves and pins the target IP and
   tunnels that connection through `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` when the proxy is a
   SOCKS5 proxy (`NO_PROXY` exclusions respected; DNS stays local for the guard). Other proxy
-  schemes fall back to a direct connection. The search and Jina rendering paths use the process-wide
-  `fetch`, so an agent-level proxy dispatcher applies there too — see
+  schemes fall back to a direct connection. The search path uses the process-wide `fetch`, so an
+  agent-level proxy dispatcher applies there too — see
   [Companion: rotating exit IPs](#companion-rotating-exit-ips).
 - Dedup and titles: the aggregator keys on canonicalized hrefs (`utm_*`/tracking parameters
   and fragments stripped, then the URL re-serialized); fetched HTML pages are prefixed with
@@ -198,16 +222,16 @@ converted text plus SPA markers, script-heavy markup, a noscript body, or a desc
 
 ## When to use alternatives
 
-This package keeps Studio's deterministic, zero-dependency pipeline and test parity with
-`unsloth/studio`, then layers local access, third-party rendering, and other Studio-independent
-behavior on top. The SSRF guard is real and thoroughly tested, but it is opt-in:
+This package keeps Studio's deterministic, dependency-free core pipeline and test parity with
+`unsloth/studio`, then layers local access, browser-fingerprint fetching, local rendering, and other
+Studio-independent behavior on top. The SSRF guard is real and thoroughly tested, but it is opt-in:
 `allowPrivateAddresses` defaults to `true`, and local files are readable unless `allowLocalFiles`
 is `false`. For other tradeoffs, prefer:
 
 | Need | Use |
 |---|---|
-| Browser-like TLS/HTTP fingerprinting to unblock bot-defended pages | `pi-smart-fetch` (`wreq-js` `chrome_145`) |
-| Headless Chrome for JS-rendered SPAs/YouTube/Reddit threads | Built-in automatic Jina Reader rendering in `web_fetch` first; `georgebashi/pi-web-fetch` (puppeteer + trafilatura) when the Reader falls short |
+| Browser-like TLS/HTTP fingerprinting to unblock bot-defended pages | Built in: `webFetch.transport` defaults to `tls-first`, which speaks Chrome's TLS/HTTP2 shape through `wreq-js`; `pi-smart-fetch` (`wreq-js` `chrome_145`) if you want a separate tool |
+| Headless Chrome for JS-rendered SPAs/YouTube/Reddit threads | Built-in local Lightpanda rendering; `georgebashi/pi-web-fetch` (puppeteer + trafilatura) or a Patchright-based tier when it falls short |
 | Hosted search with semantic ranking and no scraping | `Brave Search API` / `Tavily` / `Exa` via `pi-ollama-web-search` |
 | Prompt-focused page distillation to save context | `pi-web-fetch` `prompt` -> sub-agent or Claude Code `WebFetch(url,prompt)` |
 | Batch fetching many URLs concurrently | `pi-smart-fetch` `batch_web_fetch` or call `web_fetch` in parallel |
@@ -219,8 +243,8 @@ choose the best tool per URL. No need to fork this package to add those features
 
 [`pi-tor-proxy`](https://github.com/YuGiMob/pi-tor-proxy) routes pi's in-process `fetch` traffic
 through Tor (it downloads and manages its own Tor binary) and gives each pi instance its own
-circuit and exit IP. The search sweep and Jina rendering both use `fetch`, so they leave through
-the current Tor exit, and Jina rate-limits keyless Reader requests per outgoing IP —
+circuit and exit IP. The search sweep uses the process-wide `fetch`, so it leaves through the
+current Tor exit, and many search engines rate-limit or challenge per outgoing IP —
 `/tor-cycle` swaps the exit those limits are counted against, while `/tor-country` and
 `/tor-exclude` constrain which exits are used.
 
@@ -263,30 +287,11 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `websitePolicy` | none | Not read from settings. Tools run unrestricted by default; `websitePolicy` is a programmatic option the host passes to `webSearch` / `fetchPageText` |
 | `unslothWebTools.allowPrivateAddresses` / `webFetch.allowPrivateAddresses` | `true` | Opt out to restore the resolved-IP SSRF guard: private/loopback/link-local hosts (localhost, LAN IPs) are refused again. Non-canonical numeric IP encodings stay blocked either way |
 | `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
-| `unslothWebTools.jinaApiKey` / `webRender.jinaApiKey` | none (`JINA_API_KEY` fallback) | API key for automatic Jina Reader rendering; raises its rate limits. Settings keys win over the environment variable |
+| `webFetch.transport` / `unslothWebTools.transport` | `tls-first` | Fetch transport order: `tls-first` (default), `direct-first`, or `off` to disable the browser-fingerprint transport entirely |
+| `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering |
+| `webRender.lightpandaPath` / `unslothWebTools.lightpandaPath` | `lightpanda` on `PATH` (`PI_LIGHTPANDA_BIN` fallback) | Path to the Lightpanda binary used for local rendering |
 
-### Settings window
-
-`/webtools-config` opens an interactive settings window (↑↓ navigate, space toggle, q close). Settings
-persist across sessions in `~/.config/pi-unsloth-webtools/config.json`, created when a setting is
-first changed:
-
-```json
-{
-  "webRenderEnabled": true
-}
-```
-
-| Key | Default | Description |
-|---|---|---|
-| `webRenderEnabled` | `true` | When `false`, automatic Jina Reader rendering is disabled: HTTP 403 and JavaScript-page escalation in `web_fetch` no longer run |
-
-On non-Windows platforms the directory honors `XDG_CONFIG_HOME` when set (falling back to
-`~/.config`); on Windows it always uses `~/.config`.
-
-Tool params always win over file defaults. Search dedup also strips default ports, so `https://example.com:443/a` and `https://example.com/a` collapse.
-
-Environment overrides: `PI_UNSLOTH_CACHE_DIR` changes the fetch cache directory, `PI_UNSLOTH_WEBTOOLS_STATS` opts into append-only sweep stats JSONL, `PI_CODING_AGENT_DIR` / `PI_AGENT_DIR` change the global settings directory, and `JINA_API_KEY` supplies the Jina Reader key when no settings key is set. Cache entries live 1 hour and stale copies are served only after a network failure. SOCKS5 proxies named by `HTTPS_PROXY`, `HTTP_PROXY`, or `ALL_PROXY` are honored on every fetch (`NO_PROXY` exclusions apply).
+Environment overrides: `PI_UNSLOTH_CACHE_DIR` changes the fetch cache directory, `PI_UNSLOTH_WEBTOOLS_STATS` opts into append-only sweep stats JSONL, `PI_CODING_AGENT_DIR` / `PI_AGENT_DIR` change the global settings directory, and `PI_LIGHTPANDA_BIN` points at the local renderer binary. Cache entries live 1 hour and stale copies are served only after a network failure. SOCKS5 proxies named by `HTTPS_PROXY`, `HTTP_PROXY`, or `ALL_PROXY` are honored on every fetch (`NO_PROXY` exclusions apply).
 
 ## Troubleshooting
 
@@ -303,18 +308,21 @@ Match on the exact prefix. Do not retry blocked hosts with spelling tricks.
 | Private address blocked | `Blocked: refusing to fetch the non-public address ...` | The SSRF guard is active (`allowPrivateAddresses: false`); remove it or set `true` to reach localhost/LAN, and write the scheme explicitly (`http://localhost:3000`). |
 | Local file blocked | `Blocked: the URL has an invalid hostname or port.` for paths | Local files are disabled: remove `allowLocalFiles: false` to read `file://`, absolute, `~/`, or `./` paths. |
 | File read failed | `Failed to read file: ...` | Check the path exists and is a regular file. |
-| HTTP failure | `Failed to fetch URL: HTTP ...` | Fix the URL. A 404 automatically tries a Wayback snapshot; a 403 retries through the Jina Reader when rendering is enabled. |
+| HTTP failure | `Failed to fetch URL: HTTP ...` | Fix the URL. A 404 automatically tries a Wayback snapshot; a 403 retries through the browser-fingerprint transport first. |
 | Proxy failure | `Failed to fetch URL: SOCKS5 proxy ...` | The SOCKS5 proxy refused or failed (for example Tor is stopping). Check the proxy, or unset the proxy variables for a direct fetch. |
 | Non-text / binary | `(non-text content:` / `(binary content,` | Not readable as text by design. |
 | PDF without text | `(PDF contains no extractable text)` / `(PDF content could not be read as text...)` | Scanned or encrypted PDF. |
 | Download cap hit | `... (page truncated at the download limit)` | Raw fetch hit 512 KiB (10 MiB for PDFs). |
 | maxChars cut | `... (truncated, N chars total)` | Raise `maxChars` for the full text. |
-| Empty page | `(page returned no readable text)` | Page had no extractable text; `web_fetch` retries through the Jina Reader automatically when rendering is enabled. |
+| Empty page | `(page returned no readable text)` | Page had no extractable text; `web_fetch` then tries local Lightpanda if it is installed. |
 | JavaScript-rendered page | `*(JavaScript-rendered page; content may be incomplete)*` | Rendering was disabled or produced no more text; the page likely needs a browser. |
 | GitHub rewrite | `README of ... (fetched via the GitHub README API):` | Expected repo-root rewrite, not the HTML chrome. |
 | Cache fallback | `Served from cache` / `STALE cache from YYYY-MM-DD` | Network failed; output is the cached copy with its date. |
 | Wayback fallback | `Fetched from Wayback Machine snapshot (YYYY-MM-DD) for ...` | Original 404'd; output is the archived copy with its date. |
 
+| No renderer available | `*(JavaScript-rendered page; content may be incomplete)*` with no local note | Install Lightpanda, or set `webRender.lightpandaPath` / `PI_LIGHTPANDA_BIN`, to render JavaScript-heavy pages locally |
+| Local renderer failed | `Failed to render URL: Lightpanda exited with code N.` | The failed tier falls through to the next one; check the binary by hand with `lightpanda fetch --dump markdown <url>` |
+| Local renderer blocked a target | `Blocked: the local renderer cannot fetch local files.` | The local browser refuses local paths by design; fetch them with `web_fetch` directly instead |
 ## Development
 
 ```sh
@@ -323,7 +331,35 @@ npm run typecheck
 npm test
 npm run test:unit
 npm run test:smoke
+npm run compare:fetch
+npm run compare:browsers
+npm run camoufox:warmup
+npm run stealth:matrix
+/tmp/pyenv/bin/python scripts/stealth-python.py
 ```
+
+`npm run compare:fetch` runs a live head-to-head of the direct fetch, the TLS-impersonation retry,
+local Lightpanda rendering over a target list. It accepts URLs as arguments and `--no-lightpanda`
+to drop the render tier. `npm run compare:browsers` adds a Camoufox column;
+install it separately (`npm i camoufox-js playwright-core && npx camoufox-js fetch`, plus GTK3
+libraries on Linux) and use `--seconds=N` to bound how long it waits out a JS challenge.
+`npm run stealth:matrix` compares stealth-browser options against one walled page (plus
+`bot.sannysoft.com` detection rows and a plain-page sanity check): raw CDP to a system Chromium
+(`PI_CHROMIUM_BIN` to point at it), Playwright with its bundled Chromium, Patchright, and Camoufox.
+Every browser dependency is loaded through a guarded dynamic import, so nothing is added to
+`package.json`; install whichever rows you want to measure. `--attempts=N` and `--seconds=N` bound
+the walled-page attempts, and passing row names runs a subset (`raw-cdp`, `playwright`, `patchright`,
+`camoufox`).
+
+`scripts/stealth-python.py` is the same idea for the Python-side options (nodriver, CloakBrowser,
+DrissionPage, cloudscraper, curl_cffi) against the same walled page; it needs a venv with those
+packages installed and is not wired into any npm script. Measured findings are in its module docstring.
+
+`npm run camoufox:warmup` measures what a warm Camoufox costs and buys: launch time, idle CPU and
+RSS, per-fetch latency with the browser already running, and whether a persistent profile
+(`user_data_dir`, pinned fingerprint) lets a Cloudflare clearance survive a restart. Flags:
+`--virtual` for a virtual display, `--pin=0` to let Camoufox rotate fingerprints, `--seconds=N`,
+`--idle=N`.
 
 ## Tests
 
@@ -351,12 +387,17 @@ The suite ports Unsloth Studio's own tests for these tools:
 - `test/smoke.test.ts`: live network checks against real hosts, including a per-engine
   result-health sweep (at least two engines must return well-formed results; engines
   that block or reset connections from datacenter IPs count as unhealthy, not failures)
-- `test/web-render.test.ts`: Jina Reader rendering with a stubbed fetch and DNS, the public-only
-  guard, policy enforcement, error mapping, truncation, cancellation, and API key precedence
 
-The seams (`seams.resolve` / `seams.request` / `rawFetch`) replace the network stack
-with fakes, mirroring how the Studio suite monkeypatches `_validate_and_resolve_host`
-and `build_opener`.
+- `test/tls-fetch.test.ts`: the browser-fingerprint transport with a stubbed native module, including
+  transport reuse, body caps, redirect passthrough, and abort/timeout mapping
+- `test/lightpanda.test.ts`: the local renderer's command line, guards, failure modes, and a real
+  child-process run against a scripted binary
+- `test/impersonation.test.ts`: the HTTP 403 retry inside the fetch pipeline, including redirect
+  re-validation, the disabled path, and the stubbed-network contract
+The seams (`seams.resolve` / `seams.request` / `seams.impersonate` / `rawFetch`) replace the network
+stack with fakes, mirroring how the Studio suite monkeypatches `_validate_and_resolve_host` and
+`build_opener`. Supplying a `request` seam also disables the browser-fingerprint retry, so a stubbed
+transport never escapes to the real network.
 
 ## License
 

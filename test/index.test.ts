@@ -7,8 +7,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import registerExtension, { createWebTools } from "../index.ts";
 import type { FetchPageOptions, RenderHint } from "../web-fetch.ts";
 import type { WebSearchOptions } from "../web-search.ts";
-import { readConfig, writeConfig } from "../config.ts";
-import { testTheme, waitFor, withTempConfig } from "./config-helpers.ts";
 
 function firstText(update: { content: { type: string; text?: string }[] }): string {
   return update.content[0]?.text ?? "";
@@ -18,99 +16,30 @@ function callText(component: { render(width: number): string[] } | undefined): s
   return component?.render(80).join("\n") ?? "";
 }
 
-interface Harness {
-  handlers: Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>;
-  commands: Map<string, { description?: string; handler: (args: string, ctx: unknown) => Promise<unknown> }>;
-  tools: string[];
-  active: () => string[];
+function textOf(result: unknown): string {
+  const content = (result as { content?: { text?: string }[] } | undefined)?.content;
+  return content?.[0]?.text ?? "";
 }
 
-function makeHarness(initialActive: string[]): Harness {
-  let active = [...initialActive];
-  const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>();
-  const commands = new Map<
-    string,
-    { description?: string; handler: (args: string, ctx: unknown) => Promise<unknown> }
-  >();
+function makeHarness(): { tools: string[]; commands: string[]; handlers: string[] } {
   const tools: string[] = [];
+  const commands: string[] = [];
+  const handlers: string[] = [];
   const pi = {
     registerTool: (tool: { name: string }) => tools.push(tool.name),
-    registerCommand: (
-      name: string,
-      options: { description?: string; handler: (args: string, ctx: unknown) => Promise<unknown> }
-    ) => {
-      commands.set(name, options);
-    },
-    on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<unknown>) => {
-      handlers.set(name, handler);
-    },
-    getActiveTools: () => [...active],
-    setActiveTools: (names: string[]) => {
-      active = names;
-    },
+    registerCommand: (name: string) => commands.push(name),
+    on: (name: string) => handlers.push(name),
   } as unknown as ExtensionAPI;
   registerExtension(pi);
-  return { handlers, commands, tools, active: () => active };
+  return { tools, commands, handlers };
 }
 
 describe("extension registration", () => {
-  it("registers the web tools and the webtools-config command", () => {
-    const harness = makeHarness(["read", "web_fetch"]);
+  it("registers the web tools and nothing else", () => {
+    const harness = makeHarness();
     expect(harness.tools).toEqual(["web_search", "web_fetch"]);
-    expect([...harness.commands.keys()]).toEqual(["webtools-config"]);
-    expect(harness.commands.get("webtools-config")?.description).toContain("JavaScript");
-  });
-});
-
-describe("web render config", () => {
-  it("warns about a corrupt config on session start without touching tools", async () => {
-    await withTempConfig(async (dir) => {
-      await mkdir(join(dir, ".config", "pi-unsloth-webtools"), { recursive: true });
-      await writeFile(join(dir, ".config", "pi-unsloth-webtools", "config.json"), JSON.stringify([1, 2]));
-      const harness = makeHarness(["read", "web_search", "web_fetch"]);
-      const notices: { message: string; level: string }[] = [];
-      await harness.handlers.get("session_start")?.(
-        {},
-        { hasUI: true, ui: { notify: (message: string, level: string) => notices.push({ message, level }) } },
-      );
-      expect(harness.active()).toEqual(["read", "web_search", "web_fetch"]);
-      expect(notices[0]?.level).toBe("warning");
-    });
-  });
-
-  it("keeps tools active on session start when rendering is disabled", async () => {
-    await withTempConfig(async () => {
-      await writeConfig({ webRenderEnabled: false });
-      const harness = makeHarness(["read", "web_search", "web_fetch"]);
-      await harness.handlers.get("session_start")?.({}, { hasUI: false });
-      expect(harness.active()).toEqual(["read", "web_search", "web_fetch"]);
-    });
-  });
-
-  it("toggles rendering through the config command", async () => {
-    await withTempConfig(async () => {
-      const harness = makeHarness(["read", "web_search", "web_fetch"]);
-      let overlay: { handleInput(data: string): void } | undefined;
-      const ctx = {
-        hasUI: true,
-        ui: {
-          notify: () => {},
-          custom: async (
-            factory: (tui: unknown, theme: Theme, keybindings: unknown, done: () => void) => Promise<unknown>
-          ) => {
-            overlay = (await factory({ requestRender: () => {} }, testTheme(), undefined, () => {})) as {
-              handleInput(data: string): void;
-            };
-          },
-        },
-      };
-      await harness.commands.get("webtools-config")?.handler("", ctx);
-      expect(overlay).toBeDefined();
-      overlay?.handleInput(" ");
-      await waitFor(async () => (await readConfig()).webRenderEnabled === false);
-      overlay?.handleInput(" ");
-      await waitFor(async () => (await readConfig()).webRenderEnabled === true);
-    });
+    expect(harness.commands).toEqual([]);
+    expect(harness.handlers).toEqual([]);
   });
 });
 
@@ -131,6 +60,7 @@ describe("web_search tool", () => {
       signal: undefined,
       timeoutMs: 7000,
       maxResults: 10,
+      cwd: undefined,
     });
     expect(result.content[0]).toMatchObject({ type: "text", text: "results" });
   });
@@ -171,30 +101,24 @@ describe("web_fetch tool", () => {
     expect(options.timeoutMs).toBe(60000);
   });
 
-  it("passes the local access settings to the fetch", async () => {
+  it("passes local access and transport settings to the fetch", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-unsloth-idx-"));
     const previousEnv = process.env.PI_CODING_AGENT_DIR;
     try {
       await mkdir(root, { recursive: true });
       await writeFile(
         join(root, "settings.json"),
-        JSON.stringify({ webFetch: { allowPrivateAddresses: false, allowLocalFiles: false } }),
+        JSON.stringify({
+          webFetch: { allowPrivateAddresses: false, allowLocalFiles: false, transport: "off" },
+        }),
       );
       process.env.PI_CODING_AGENT_DIR = root;
-      const fetchPageText = vi.fn(
-        async (_url: string, _options?: FetchPageOptions) => "body",
-      );
+      const fetchPageText = vi.fn(async (_url: string, _options?: FetchPageOptions) => "body");
       const { webFetchTool } = createWebTools({ fetchPageText });
-      await webFetchTool.execute(
-        "id",
-        { url: "https://example.com/" },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      await webFetchTool.execute("id", { url: "https://example.com/" }, undefined, undefined, {} as never);
       expect(fetchPageText).toHaveBeenCalledWith(
         "https://example.com/",
-        expect.objectContaining({ allowPrivateAddresses: false, allowLocalFiles: false }),
+        expect.objectContaining({ allowPrivateAddresses: false, allowLocalFiles: false, transport: "off" }),
       );
     } finally {
       if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -204,114 +128,81 @@ describe("web_fetch tool", () => {
   });
 });
 
-describe("http 403 fallback", () => {
-  const FORBIDDEN = "Failed to fetch URL: HTTP 403 Forbidden";
-
-  function textOf(result: unknown): string {
-    const content = (result as { content?: { text?: string }[] } | undefined)?.content;
-    return content?.[0]?.text ?? "";
-  }
-
-  it("falls back through the Jina Reader when web_fetch is refused with 403", async () => {
-    const fetchPageText = vi.fn(async () => FORBIDDEN);
-    const renderPageText = vi.fn(async () => "Title: Blocked\n\nRendered body text.");
-    const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
-    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
-    expect(renderPageText).toHaveBeenCalledWith("https://example.com/bot", expect.objectContaining({ timeoutMs: expect.any(Number) }));
-    const text = textOf(result);
-    expect(text).toContain("rendered via the Jina Reader instead");
-    expect(text).toContain("Rendered body text.");
-  });
-
-  it("keeps the 403 when rendering is disabled", async () => {
-    const fetchPageText = vi.fn(async () => FORBIDDEN);
-    const renderPageText = vi.fn(async () => "Rendered body text.");
-    const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => false });
-    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
-    expect(textOf(result)).toBe(FORBIDDEN);
-    expect(renderPageText).not.toHaveBeenCalled();
-  });
-
-  it("honors the stored webRenderEnabled setting by default", async () => {
-    await withTempConfig(async () => {
-      await writeConfig({ webRenderEnabled: false });
-      const fetchPageText = vi.fn(async () => FORBIDDEN);
-      const renderPageText = vi.fn(async () => "Rendered body text.");
-      const { webFetchTool } = createWebTools({ fetchPageText, renderPageText });
-      const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
-      expect(textOf(result)).toBe(FORBIDDEN);
-      expect(renderPageText).not.toHaveBeenCalled();
-    });
-  });
-
-  it("keeps the 403 when the render also fails", async () => {
-    const fetchPageText = vi.fn(async () => FORBIDDEN);
-    const renderPageText = vi.fn(async () => "Failed to render URL: 429 Too Many Requests");
-    const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
-    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
-    expect(textOf(result)).toBe(FORBIDDEN);
-  });
-
-  it("keeps the 403 when the render target cannot be resolved", async () => {
-    const fetchPageText = vi.fn(async () => FORBIDDEN);
-    const renderPageText = vi.fn(async () => "Failed to render URL: Failed to resolve host: getaddrinfo ENOTFOUND example.com");
-    const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
-    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
-    expect(textOf(result)).toBe(FORBIDDEN);
-  });
-
-  it("does not render for other fetch failures", async () => {
-    const fetchPageText = vi.fn(async () => "Failed to fetch URL: HTTP 404 Not Found");
-    const renderPageText = vi.fn(async () => "Rendered body text.");
-    const { webFetchTool } = createWebTools({ fetchPageText, renderPageText, webRenderEnabled: async () => true });
-    const result = await webFetchTool.execute("id", { url: "https://example.com/gone" }, undefined, undefined, {} as never);
-    expect(textOf(result)).toBe("Failed to fetch URL: HTTP 404 Not Found");
-    expect(renderPageText).not.toHaveBeenCalled();
-  });
-});
-
-describe("javascript render fallback", () => {
+describe("local render fallback", () => {
   const HINT: RenderHint = { reason: "js-shell", evidence: ["spa-markers"] };
+  const FORBIDDEN = "Failed to fetch URL: HTTP 403 Forbidden";
+  const LONG_PAGE = "Title: App\n\n" + "Rendered locally body text. ".repeat(50);
 
-  function textOf(result: unknown): string {
-    const content = (result as { content?: { text?: string }[] } | undefined)?.content;
-    return content?.[0]?.text ?? "";
-  }
+  it("renders a 403 locally when the renderer is available", async () => {
+    const fetchPageOutcome = vi.fn(async () => ({ text: FORBIDDEN, hint: null }));
+    const renderLocalPageText = vi.fn(async () => LONG_PAGE);
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderLocalPageText });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
+    expect(renderLocalPageText).toHaveBeenCalledWith(
+      "https://example.com/bot",
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+    );
+    expect(textOf(result)).toContain("Direct fetch failed with HTTP 403");
+    expect(textOf(result)).toContain("rendered locally with Lightpanda instead");
+    expect(textOf(result)).toContain("Rendered locally body text.");
+  });
 
-  it("renders a thin javascript page automatically", async () => {
+  it("keeps the 403 when no local renderer is configured", async () => {
+    const fetchPageOutcome = vi.fn(async () => ({ text: FORBIDDEN, hint: null }));
+    const renderLocalPageText = vi.fn(async () => null);
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderLocalPageText });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
+    expect(textOf(result)).toBe(FORBIDDEN);
+  });
+
+  it("keeps the 403 when the local render fails", async () => {
+    const fetchPageOutcome = vi.fn(async () => ({ text: FORBIDDEN, hint: null }));
+    const renderLocalPageText = vi.fn(async () => "Failed to render URL: timed out.");
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderLocalPageText });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
+    expect(textOf(result)).toBe(FORBIDDEN);
+  });
+
+  it("keeps the 403 when the local render is only a bot challenge page", async () => {
+    const fetchPageOutcome = vi.fn(async () => ({ text: FORBIDDEN, hint: null }));
+    const renderLocalPageText = vi.fn(async () => "Title: Attention Required! | Cloudflare\n\nJust a moment...");
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderLocalPageText });
+    const result = await webFetchTool.execute("id", { url: "https://example.com/bot" }, undefined, undefined, {} as never);
+    expect(textOf(result)).toBe(FORBIDDEN);
+  });
+
+  it("renders a thin javascript page locally", async () => {
     const fetchPageOutcome = vi.fn(async () => ({ text: "(page returned no readable text)", hint: HINT }));
-    const renderPageText = vi.fn(async () => "Title: App\n\n" + "Rendered body text. ".repeat(20));
-    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderPageText, webRenderEnabled: async () => true });
+    const renderLocalPageText = vi.fn(async () => LONG_PAGE);
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderLocalPageText });
     const result = await webFetchTool.execute("id", { url: "https://example.com/app" }, undefined, undefined, {} as never);
-    expect(renderPageText).toHaveBeenCalledWith("https://example.com/app", expect.objectContaining({ timeoutMs: expect.any(Number) }));
-    expect(textOf(result)).toContain("rendered via the Jina Reader instead");
-    expect(textOf(result)).toContain("Rendered body text.");
+    expect(textOf(result)).toContain("rendered locally with Lightpanda instead");
+    expect(textOf(result)).toContain("Rendered locally body text.");
   });
 
-  it("appends the incomplete note when rendering is disabled", async () => {
+  it("appends the incomplete note when the renderer is missing", async () => {
     const fetchPageOutcome = vi.fn(async () => ({ text: "Title: App", hint: HINT }));
-    const renderPageText = vi.fn(async () => "Rendered body text.");
-    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderPageText, webRenderEnabled: async () => false });
+    const renderLocalPageText = vi.fn(async () => null);
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderLocalPageText });
     const result = await webFetchTool.execute("id", { url: "https://example.com/app" }, undefined, undefined, {} as never);
-    expect(renderPageText).not.toHaveBeenCalled();
     expect(textOf(result)).toContain("(JavaScript-rendered page; content may be incomplete)");
   });
 
-  it("keeps the fetched text when rendering is not richer", async () => {
-    const fetchPageOutcome = vi.fn(async () => ({ text: "x".repeat(200), hint: HINT }));
-    const renderPageText = vi.fn(async () => "x".repeat(100));
-    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderPageText, webRenderEnabled: async () => true });
+  it("appends the incomplete note when the local render is not richer", async () => {
+    const fetchPageOutcome = vi.fn(async () => ({ text: "x".repeat(2000), hint: HINT }));
+    const renderLocalPageText = vi.fn(async () => "x".repeat(100));
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderLocalPageText });
     const result = await webFetchTool.execute("id", { url: "https://example.com/app" }, undefined, undefined, {} as never);
     expect(textOf(result)).toContain("(JavaScript-rendered page; content may be incomplete)");
-    expect(textOf(result).startsWith("x".repeat(200))).toBe(true);
+    expect(textOf(result).startsWith("x".repeat(2000))).toBe(true);
   });
 
   it("does not render when the fetch looks complete", async () => {
     const fetchPageOutcome = vi.fn(async () => ({ text: "Full page text.", hint: null }));
-    const renderPageText = vi.fn(async () => "Rendered body text.");
-    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderPageText, webRenderEnabled: async () => true });
+    const renderLocalPageText = vi.fn(async () => LONG_PAGE);
+    const { webFetchTool } = createWebTools({ fetchPageOutcome, renderLocalPageText });
     const result = await webFetchTool.execute("id", { url: "https://example.com/" }, undefined, undefined, {} as never);
-    expect(renderPageText).not.toHaveBeenCalled();
+    expect(renderLocalPageText).not.toHaveBeenCalled();
     expect(textOf(result)).toBe("Full page text.");
   });
 });

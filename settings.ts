@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { agentDir } from "./agent-dir.ts";
+import type { FetchTransport } from "./web-fetch.ts";
 
 async function readJson(file: string): Promise<Record<string, unknown> | undefined> {
   try {
@@ -94,11 +95,22 @@ const ALLOW_LOCAL_FILES_PATHS: string[][] = [
   ["webFetch", "allowLocalFiles"],
 ];
 
-const JINA_API_KEY_PATHS: string[][] = [
-  ["unslothWebTools", "jinaApiKey"],
-  ["webRender", "jinaApiKey"],
+const TRANSPORT_PATHS: string[][] = [
+  ["unslothWebTools", "transport"],
+  ["webFetch", "transport"],
 ];
 
+const TRANSPORT_VALUES: ReadonlySet<string> = new Set(["tls-first", "direct-first", "off"]);
+
+const LIGHTPANDA_ENABLED_PATHS: string[][] = [
+  ["unslothWebTools", "lightpandaEnabled"],
+  ["webRender", "lightpandaEnabled"],
+];
+
+const LIGHTPANDA_PATH_PATHS: string[][] = [
+  ["unslothWebTools", "lightpandaPath"],
+  ["webRender", "lightpandaPath"],
+];
 function clampMaxResults(value: number): number {
   return Math.min(20, Math.max(1, value));
 }
@@ -151,11 +163,13 @@ export async function loadDefaultFetchSettings(cwd?: string): Promise<{
   timeoutMs?: number;
   allowPrivateAddresses: boolean;
   allowLocalFiles: boolean;
+  transport: FetchTransport;
 }> {
   let maxChars: number | undefined;
   let timeoutMs: number | undefined;
   let allowPrivateAddresses = true;
   let allowLocalFiles = true;
+  let transport: FetchTransport = "tls-first";
   for (const data of await settingsEntries(cwd)) {
     const c = pickNumber(data, FETCH_MAX_CHARS_PATHS);
     if (c !== undefined && c > 0) maxChars = c;
@@ -165,17 +179,23 @@ export async function loadDefaultFetchSettings(cwd?: string): Promise<{
     if (p !== undefined) allowPrivateAddresses = p;
     const l = pickBoolean(data, ALLOW_LOCAL_FILES_PATHS);
     if (l !== undefined) allowLocalFiles = l;
+    const mode = pickString(data, TRANSPORT_PATHS);
+    if (mode !== undefined && TRANSPORT_VALUES.has(mode)) transport = mode as FetchTransport;
   }
-  return { maxChars, timeoutMs, allowPrivateAddresses, allowLocalFiles };
+  return { maxChars, timeoutMs, allowPrivateAddresses, allowLocalFiles, transport };
 }
 
-export async function loadJinaApiKey(cwd?: string): Promise<string | undefined> {
-  let result: string | undefined;
+export async function loadLightpandaSettings(cwd?: string): Promise<{
+  enabled: boolean;
+  binaryPath: string | null;
+}> {
+  let enabled = true;
+  let binaryPath: string | null = null;
   for (const data of await settingsEntries(cwd)) {
-    const candidate = pickString(data, JINA_API_KEY_PATHS);
-    if (candidate !== undefined) result = candidate;
+    const e = pickBoolean(data, LIGHTPANDA_ENABLED_PATHS);
+    if (e !== undefined) enabled = e;
+    const p = pickString(data, LIGHTPANDA_PATH_PATHS);
+    if (p !== undefined) binaryPath = p;
   }
-  if (result !== undefined) return result;
-  const env = process.env.JINA_API_KEY?.trim();
-  return env ? env : undefined;
+  return { enabled, binaryPath };
 }

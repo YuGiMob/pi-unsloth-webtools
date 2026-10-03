@@ -9,10 +9,8 @@ import {
   fetchPageText as defaultFetchPageText,
   type FetchPageOutcome,
 } from "./web-fetch.ts";
-import { renderPageText as defaultRenderPageText } from "./web-render.ts";
-import { loadDefaultFetchSettings, loadDefaultFetchTimeoutMs, loadJinaApiKey } from "./settings.ts";
-import { readConfig, readConfigWithStatus, toggleWebRender } from "./config.ts";
-import { WebToolsConfigOverlay } from "./config-ui.ts";
+import { renderPageWithLightpanda as defaultRenderLocalPageText } from "./lightpanda.ts";
+import { loadDefaultFetchSettings, loadDefaultFetchTimeoutMs, loadLightpandaSettings } from "./settings.ts";
 
 function toolCallLine(theme: Theme, name: string, detail: string) {
   const line = theme.fg("toolTitle", theme.bold(name)) + (detail ? ` ${theme.fg("accent", detail)}` : "");
@@ -28,6 +26,7 @@ function positiveNumber(value: unknown): number | undefined {
   const n = Math.floor(value);
   return n > 0 ? n : undefined;
 }
+
 async function fetchDefaults(cwd: string | undefined, params: { timeoutMs?: unknown; maxChars?: unknown }) {
   const timeoutParam = positiveNumber(params.timeoutMs);
   const maxCharsParam = positiveNumber(params.maxChars);
@@ -37,6 +36,7 @@ async function fetchDefaults(cwd: string | undefined, params: { timeoutMs?: unkn
     maxChars: maxCharsParam ?? defaults.maxChars,
     allowPrivateAddresses: defaults.allowPrivateAddresses,
     allowLocalFiles: defaults.allowLocalFiles,
+    transport: defaults.transport,
   };
 }
 
@@ -56,9 +56,36 @@ function renderImprovesPage(rendered: string, fetched: string): boolean {
   return visibleChars(rendered) > visibleChars(fetched) * 1.5;
 }
 
-const FORBIDDEN_FALLBACK_NOTE = "Direct fetch failed with HTTP 403; rendered via the Jina Reader instead.";
-const THIN_FALLBACK_NOTE = "Direct fetch returned little content; rendered via the Jina Reader instead.";
+const LOCAL_FORBIDDEN_NOTE = "Direct fetch failed with HTTP 403; rendered locally with Lightpanda instead.";
+const LOCAL_THIN_NOTE = "Direct fetch returned little content; rendered locally with Lightpanda instead.";
 const INCOMPLETE_NOTE = "\n\n*(JavaScript-rendered page; content may be incomplete)*";
+const RENDER_HEADER_LINE_RE = /^(?:URL: |Rendered via |Title: |Author: |Date: |Site: )/;
+
+function renderedProseChars(text: string): number {
+  const prose = text
+    .split("\n")
+    .filter((line) => !RENDER_HEADER_LINE_RE.test(line))
+    .join("\n");
+  return visibleChars(prose);
+}
+
+const INTERSTITIAL_MAX_PROSE_CHARS = 4000;
+const INTERSTITIAL_MARKERS = [
+  "just a moment",
+  "attention required",
+  "you have been blocked",
+  "enable javascript and cookies to continue",
+  "checking if the site connection is secure",
+  "access denied",
+  "please enable cookies",
+  "cf-error-details",
+];
+
+function looksLikeInterstitial(text: string): boolean {
+  if (renderedProseChars(text) > INTERSTITIAL_MAX_PROSE_CHARS) return false;
+  const lowered = text.toLowerCase();
+  return INTERSTITIAL_MARKERS.some((marker) => lowered.includes(marker));
+}
 
 const WebSearchParams = Type.Object({
   query: Type.Optional(
@@ -98,21 +125,18 @@ export interface WebToolsDeps {
   fetchPageText?: typeof defaultFetchPageText;
   fetchPageOutcome?: typeof defaultFetchPageOutcome;
   webSearch?: typeof defaultWebSearch;
-  renderPageText?: typeof defaultRenderPageText;
-  webRenderEnabled?: () => Promise<boolean>;
+  renderLocalPageText?: typeof defaultRenderLocalPageText;
 }
 
 export function createWebTools(deps: WebToolsDeps = {}) {
   const webSearch = deps.webSearch ?? defaultWebSearch;
-  const renderPageText = deps.renderPageText ?? defaultRenderPageText;
+  const renderLocalPageText = deps.renderLocalPageText ?? defaultRenderLocalPageText;
   const legacyFetchPageText = deps.fetchPageText;
   const fetchOutcome: typeof defaultFetchPageOutcome =
     deps.fetchPageOutcome ??
     (legacyFetchPageText
       ? async (url, options) => ({ text: await legacyFetchPageText(url, options), hint: null })
       : defaultFetchPageOutcome);
-  const webRenderEnabled =
-    deps.webRenderEnabled ?? (async () => (await readConfig()).webRenderEnabled !== false);
 
   const renderFallback = async (
     url: string,
@@ -123,21 +147,17 @@ export function createWebTools(deps: WebToolsDeps = {}) {
     const thin = outcome.hint !== null && !forbidden;
     if (!forbidden && !thin) return null;
     const incomplete = outcome.text + INCOMPLETE_NOTE;
-    try {
-      if (!(await webRenderEnabled())) return thin ? incomplete : null;
-      const apiKey = await loadJinaApiKey(options.cwd);
-      const rendered = await renderPageText(url, {
-        timeoutMs: options.timeoutMs,
-        maxChars: options.maxChars,
-        signal: options.signal,
-        apiKey,
-      });
-      if (renderFailed(rendered)) return thin ? incomplete : null;
-      if (thin && !renderImprovesPage(rendered, outcome.text)) return incomplete;
-      return (forbidden ? FORBIDDEN_FALLBACK_NOTE : THIN_FALLBACK_NOTE) + "\n\n" + rendered;
-    } catch {
-      return thin ? incomplete : null;
-    }
+    const settings = await loadLightpandaSettings(options.cwd).catch(() => null);
+    const rendered = await renderLocalPageText(url, {
+      timeoutMs: options.timeoutMs,
+      maxChars: options.maxChars,
+      signal: options.signal,
+      settings,
+    }).catch(() => null);
+    if (rendered === null) return thin ? incomplete : null;
+    if (renderFailed(rendered) || looksLikeInterstitial(rendered)) return thin ? incomplete : null;
+    if (thin && !renderImprovesPage(rendered, outcome.text)) return incomplete;
+    return (forbidden ? LOCAL_FORBIDDEN_NOTE : LOCAL_THIN_NOTE) + "\n\n" + rendered;
   };
 
   return {
@@ -175,15 +195,16 @@ export function createWebTools(deps: WebToolsDeps = {}) {
       description:
         "Fetch a URL and return its readable text. HTML pages are converted to Markdown using a " +
         "main-content heuristic: article/main scoping plus hidden-element and boilerplate " +
-        "stripping. Pages that look JavaScript-rendered are retried through the Jina Reader " +
-        "automatically when rendering is enabled, as are HTTP 403 responses. " +
+        "stripping. HTTP 403 responses are retried over a browser-fingerprint transport, and pages " +
+        "that look JavaScript-rendered (or still refused) are rendered locally with Lightpanda when " +
+        "the binary is installed; no third-party rendering service is involved. " +
         "Non-HTML text is returned as-is. GitHub repo root pages are rewritten to the " +
         "README API, so the README is returned instead of the repo page's UI chrome. " +
         "Private/loopback/link-local targets and local files (file:// URLs, absolute, ~/ or ./ paths, including " +
         "PDFs) are supported by default; opt out with webFetch.allowPrivateAddresses: false or " +
         "webFetch.allowLocalFiles: false in settings. The download size is capped.",
       promptGuidelines: [
-        "web_fetch escalates JavaScript-rendered pages and HTTP 403 responses to the Jina Reader automatically when rendering is enabled.",
+        "web_fetch renders JavaScript-rendered pages locally with Lightpanda when its binary is installed; it never calls a third-party rendering service.",
       ],
       promptSnippet: "Fetch a web page and return readable text content",
       parameters: WebFetchParams,
@@ -193,7 +214,7 @@ export function createWebTools(deps: WebToolsDeps = {}) {
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {
         onUpdate?.({ content: [{ type: "text", text: `Fetching ${params.url}...` }], details: {} });
         const cwd = (_ctx as ExtensionContext | undefined)?.cwd;
-        const { timeoutMs, maxChars, allowPrivateAddresses, allowLocalFiles } = await fetchDefaults(cwd, params);
+        const { timeoutMs, maxChars, allowPrivateAddresses, allowLocalFiles, transport } = await fetchDefaults(cwd, params);
         const deadlineMs = Date.now() + timeoutMs;
         const outcome = await fetchOutcome(params.url, {
           timeoutMs,
@@ -202,6 +223,7 @@ export function createWebTools(deps: WebToolsDeps = {}) {
           maxChars,
           allowPrivateAddresses,
           allowLocalFiles,
+          transport,
         });
         const rendered = await renderFallback(params.url, outcome, {
           timeoutMs: Math.max(1, deadlineMs - Date.now()),
@@ -219,44 +241,4 @@ export default function (pi: ExtensionAPI) {
   const { webSearchTool, webFetchTool } = createWebTools();
   pi.registerTool(webSearchTool);
   pi.registerTool(webFetchTool);
-
-  pi.on("session_start", async (_event, ctx) => {
-    try {
-      const { corrupted } = await readConfigWithStatus();
-      if (corrupted && ctx.hasUI) {
-        ctx.ui.notify("Web tools config was corrupt and was reset to defaults", "warning");
-      }
-    } catch (error) {
-      console.error("Failed to load web tools config:", error);
-    }
-  });
-
-  pi.registerCommand("webtools-config", {
-    description: "Open the web tools settings window (JavaScript rendering on/off)",
-    handler: async (_args, ctx) => {
-      if (!ctx.hasUI) {
-        ctx.ui.notify("/webtools-config requires interactive mode", "error");
-        return;
-      }
-      await ctx.ui.custom<void>(
-        async (tui, theme, _keybindings, done) => {
-          const overlay = new WebToolsConfigOverlay({
-            tui,
-            theme,
-            done,
-            onToggle: async (key) => {
-              if (key !== "webRenderEnabled") return;
-              await toggleWebRender();
-            },
-          });
-          await overlay.load();
-          return overlay;
-        },
-        {
-          overlay: true,
-          overlayOptions: { anchor: "center", width: "90%", minWidth: 60, maxHeight: "90%" },
-        },
-      );
-    },
-  });
 }

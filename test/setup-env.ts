@@ -10,10 +10,10 @@ const ISOLATED_ENV_NAMES = [
   "all_proxy",
   "NO_PROXY",
   "no_proxy",
-  "JINA_API_KEY",
   "PI_AGENT_DIR",
   "PI_UNSLOTH_CACHE_DIR",
   "PI_UNSLOTH_WEBTOOLS_STATS",
+  "PI_LIGHTPANDA_BIN",
 ];
 
 for (const name of ISOLATED_ENV_NAMES) delete process.env[name];
