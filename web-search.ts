@@ -6,8 +6,10 @@ import {
   EmptySweepError,
   SearchCancelled,
   SearchTimeoutError,
+  type SearchEngineOptions,
   type SearchResult,
 } from "./engines.ts";
+import type { FetchTransport } from "./tls-fetch.ts";
 
 export { EmptySweepError, SearchCancelled, SearchTimeoutError } from "./engines.ts";
 
@@ -24,15 +26,20 @@ export type SearchClient = (
   maxResults: number,
   signal?: AbortSignal,
   timeoutMs?: number,
+  options?: SearchEngineOptions,
 ) => Promise<SearchResult[]>;
 export async function ddgSearch(
   query: string,
   maxResults = MAX_RESULTS,
   signal?: AbortSignal,
   timeoutMs = SEARCH_TIMEOUT_MS,
+  options: SearchEngineOptions = {},
 ): Promise<SearchResult[]> {
   if (signal?.aborted) throw new SearchCancelled();
-  return autoTextSearch(query, maxResults, timeoutMs, signal);
+  return autoTextSearch(query, maxResults, timeoutMs, signal, {
+    ...options,
+    transport: options.transport ?? "tls-first",
+  });
 }
 
 const POLICY_OVERFETCH = 4;
@@ -44,6 +51,7 @@ export interface WebSearchOptions {
   websitePolicy?: WebsitePolicy | null;
   client?: SearchClient;
   cwd?: string;
+  transport?: FetchTransport;
 }
 
 export { loadDefaultMaxResults };
@@ -71,7 +79,7 @@ export async function webSearch(
         (policy?.blockedDomains?.length ?? 0) > 0,
     );
     const wanted = restricted ? maxResults * POLICY_OVERFETCH : maxResults;
-    const results = await client(effectiveQuery, wanted, signal, timeoutMs);
+    const results = await client(effectiveQuery, wanted, signal, timeoutMs, { transport: options.transport, policy });
     if (signal?.aborted) return "Search cancelled.";
     if (!results.length) return EMPTY_SEARCH_RESULTS[0];
     const allowed: SearchResult[] = [];

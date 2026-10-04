@@ -53,6 +53,11 @@ Mirrors Unsloth Studio's `web_search` tool:
   skipped); timeouts and cancellations are never retried.
 - Sweeps stop as soon as enough results are gathered: engines still in flight are aborted
   instead of being allowed to run to their timeout.
+- Engine requests go through the browser-fingerprint transport first (`webFetch.transport`,
+  default `tls-first`) and fall back to the plain Node transport; a refusal on one transport is
+  retried on the other. Redirects are followed manually, so every hop is re-checked against the
+  website policy and private-address literals are refused. When a SOCKS5 proxy is configured the
+  sweep stays on the plain transport, keeping agent and Tor routing intact.
 
 ### web_fetch
 
@@ -218,11 +223,10 @@ third-party rendering service.
   any numeric-only line at a fixed edge position where page numbers appear on at least
   half the pages (so a one-off number sharing that position is dropped too, while fused
   labels like `Page 3 of 12` survive). Studio and pymupdf4llm return them verbatim.
-- Search engines: Node's `fetch` TLS fingerprint differs from ddgs's `primp`
-  impersonation, so Google/Brave/Yahoo/Yandex may block or serve consent pages more
-  aggressively (a blocked engine simply contributes no results). User agents are a
-  fixed browser set plus ddgs's Android Google UA generator, not `fake_useragent`'s
-  database.
+- Search engines: the sweep speaks a browser's TLS/HTTP2 shape through `wreq-js` first (the same
+  transport `web_fetch` uses), so engine fingerprints match Chrome rather than Node's `fetch`;
+  the plain Node transport is the fallback. User agents on that fallback are a fixed browser set
+  plus ddgs's Android Google UA generator, not `fake_useragent`'s database.
 - Empty sweeps: ddgs 9.14.4 raises the last engine exception; this port reports a
   timeout whenever any engine timed out, so the timeout message is not masked by later
   generic engine failures. The timeout budget bounds the entire sweep: per-engine
@@ -231,9 +235,9 @@ third-party rendering service.
 - Proxies: Studio routes through environment proxies; this port resolves and pins the target IP and
   tunnels that connection through `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` when the proxy is a
   SOCKS5 proxy (`NO_PROXY` exclusions respected; DNS stays local for the guard). Other proxy
-  schemes fall back to a direct connection. The search path uses the process-wide `fetch`, so an
-  agent-level proxy dispatcher applies there too — see
-  [Companion: rotating exit IPs](#companion-rotating-exit-ips).
+  schemes fall back to a direct connection. The search sweep stays on the process-wide `fetch`
+  whenever a SOCKS5 proxy is configured, so an agent-level proxy dispatcher still applies there —
+  see [Companion: rotating exit IPs](#companion-rotating-exit-ips).
 - Dedup and titles: the aggregator keys on canonicalized hrefs (`utm_*`/tracking parameters
   and fragments stripped, then the URL re-serialized); fetched HTML pages are prefixed with
   the document `<title>`. Studio keys on raw hrefs and returns the converted body alone.
@@ -266,8 +270,9 @@ choose the best tool per URL. No need to fork this package to add those features
 
 [`pi-tor-proxy`](https://github.com/YuGiMob/pi-tor-proxy) routes pi's in-process `fetch` traffic
 through Tor (it downloads and manages its own Tor binary) and gives each pi instance its own
-circuit and exit IP. The search sweep uses the process-wide `fetch`, so it leaves through the
-current Tor exit, and many search engines rate-limit or challenge per outgoing IP —
+circuit and exit IP. With a SOCKS5 proxy configured, the search sweep stays on the process-wide
+`fetch`, so it leaves through the current Tor exit, and many search engines rate-limit or
+challenge per outgoing IP —
 `/tor-cycle` swaps the exit those limits are counted against, while `/tor-country` and
 `/tor-exclude` constrain which exits are used.
 
@@ -310,7 +315,7 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `websitePolicy` | none | Not read from settings. Tools run unrestricted by default; `websitePolicy` is a programmatic option the host passes to `webSearch` / `fetchPageText` |
 | `unslothWebTools.allowPrivateAddresses` / `webFetch.allowPrivateAddresses` | `true` | Opt out to restore the resolved-IP SSRF guard: private/loopback/link-local hosts (localhost, LAN IPs) are refused again. Non-canonical numeric IP encodings stay blocked either way |
 | `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
-| `webFetch.transport` / `unslothWebTools.transport` | `tls-first` | Fetch transport order: `tls-first` (default), `direct-first`, or `off` to disable the browser-fingerprint transport entirely |
+| `webFetch.transport` / `unslothWebTools.transport` | `tls-first` | Transport order for `web_fetch` and `web_search` engine requests: `tls-first` (default), `direct-first`, or `off` to disable the browser-fingerprint transport entirely |
 | `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering |
 | `webRender.lightpandaPath` / `unslothWebTools.lightpandaPath` | launcher installed by `scripts/install-lightpanda.sh`, else `lightpanda` on `PATH` | Path to the Lightpanda binary used for local rendering |
 | `webRender.lightpandaCommand` / `unslothWebTools.lightpandaCommand` | none | Command prefix that launches the renderer, for WSL (`["wsl.exe","-e","<path>"]`) or containers; overrides `lightpandaPath`. The fetch flags are appended to it |

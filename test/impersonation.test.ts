@@ -38,7 +38,7 @@ describe("tls impersonation 403 retry", () => {
   });
 
   it("passes the pinned address and extra headers to the transport", async () => {
-    let seen: { pinnedIp: string; extraHeaders?: Record<string, string> } | null = null;
+    let seen: { pinnedIp: string | undefined; extraHeaders?: Record<string, string> } | null = null;
     await fetchUrlRaw("https://example.com/bot", {
       extraHeaders: { Accept: "application/vnd.github.raw+json" },
       transport: "direct-first",

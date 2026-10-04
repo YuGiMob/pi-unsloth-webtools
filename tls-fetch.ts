@@ -49,15 +49,19 @@ interface ImpersonationModule {
 
 export type ImpersonationLoader = () => Promise<ImpersonationModule | null>;
 
+export type FetchTransport = "tls-first" | "direct-first" | "off";
+
 export interface TlsHopOptions {
   url: URL;
-  pinnedIp: string;
-  family: number;
+  pinnedIp?: string;
+  family?: number;
   timeoutMs: number;
   signal?: AbortSignal;
   maxBytes: number;
   maxPdfBytes?: number;
   profile?: string;
+  method?: string;
+  body?: string;
   extraHeaders?: Record<string, string>;
   loader?: ImpersonationLoader;
 }
@@ -85,7 +89,7 @@ async function loadImpersonationModule(): Promise<ImpersonationModule | null> {
 const transports = new Map<string, Promise<ImpersonationTransport>>();
 
 function transportKey(options: TlsHopOptions): string {
-  return `${options.profile ?? DEFAULT_PROFILE}|${options.url.hostname}|${options.pinnedIp}|${options.family}`;
+  return `${options.profile ?? DEFAULT_PROFILE}|${options.url.hostname}|${options.pinnedIp ?? ""}|${options.family ?? 0}`;
 }
 
 function evictTransports(): void {
@@ -107,12 +111,13 @@ async function transportFor(
   const key = transportKey(options);
   const existing = transports.get(key);
   if (existing) return existing;
+  const transportOptions: Record<string, unknown> = {
+    browser: options.profile ?? DEFAULT_PROFILE,
+    os: DEFAULT_OS,
+  };
+  if (options.pinnedIp) transportOptions.resolve = { [options.url.hostname]: options.pinnedIp };
   const created = module
-    .createTransport({
-      resolve: { [options.url.hostname]: options.pinnedIp },
-      browser: options.profile ?? DEFAULT_PROFILE,
-      os: DEFAULT_OS,
-    })
+    .createTransport(transportOptions)
     .catch((error: unknown) => {
       transports.delete(key);
       throw error;
@@ -179,12 +184,15 @@ export async function impersonatedRequest(options: TlsHopOptions): Promise<TlsHo
   const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
   let response: ImpersonationResponse;
   try {
-    response = await module.fetch(options.url.toString(), {
+    const init: Record<string, unknown> = {
       transport,
+      method: options.method ?? "GET",
       redirect: "manual",
       signal,
       headers: hopHeaders(options.extraHeaders),
-    });
+    };
+    if (options.body !== undefined) init.body = options.body;
+    response = await module.fetch(options.url.toString(), init);
   } catch (error) {
     throw new Error(failureMessage(error, options.signal, signal));
   }

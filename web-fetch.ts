@@ -23,7 +23,7 @@ import {
   stripIpv6Brackets,
   type WebsitePolicy,
 } from "./web-access.ts";
-import { impersonatedRequest, type TlsHopOptions, type TlsHopResponse } from "./tls-fetch.ts";
+import { impersonatedRequest, type FetchTransport, type TlsHopOptions, type TlsHopResponse } from "./tls-fetch.ts";
 import { collapseWhitespace, decodeHtmlEntities, feedHtml, htmlToMarkdown, visibleChars } from "./html-to-md.ts";
 import type { AttrDict } from "./html-to-md.ts";
 import { INVALID_CHARREFS } from "./entities.ts";
@@ -210,7 +210,7 @@ export interface ResolvedHost {
   alternates?: { ip: string; family: number }[];
 }
 
-export type FetchTransport = "tls-first" | "direct-first" | "off";
+export type { FetchTransport };
 
 type TransportKind = "direct" | "tls";
 export interface FetchSeams {

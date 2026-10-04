@@ -61,6 +61,7 @@ describe("web_search tool", () => {
       timeoutMs: 7000,
       maxResults: 10,
       cwd: undefined,
+      transport: "tls-first",
     });
     expect(result.content[0]).toMatchObject({ type: "text", text: "results" });
   });

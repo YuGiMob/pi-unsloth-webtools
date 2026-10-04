@@ -5,7 +5,9 @@ import { collapseWhitespace, decodeHtmlEntities, feedHtml } from "./html-to-md.t
 import type { AttrDict } from "./html-to-md.ts";
 import { randomUserAgent } from "./user-agents.ts";
 import { agentDir } from "./agent-dir.ts";
-import { MAX_SIGNAL_TIMEOUT_MS } from "./web-access.ts";
+import { impersonatedRequest, type FetchTransport, type TlsHopOptions, type TlsHopResponse } from "./tls-fetch.ts";
+import { checkUrlAccess, isPublicIp, MAX_SIGNAL_TIMEOUT_MS, type WebsitePolicy } from "./web-access.ts";
+import { socksProxyForUrl } from "./proxy.ts";
 export class EmptySweepError extends Error {
   constructor() {
     super("No results found");
@@ -506,7 +508,15 @@ function yahooExtractUrl(raw: string): string {
   return unquotePlus(t);
 }
 
-interface EngineContext {
+export type EngineImpersonation = (options: TlsHopOptions) => Promise<TlsHopResponse | null>;
+
+export interface SearchEngineOptions {
+  transport?: FetchTransport;
+  policy?: WebsitePolicy | null;
+  impersonate?: EngineImpersonation;
+}
+
+export interface EngineContext extends SearchEngineOptions {
   region: string;
   safesearch: string;
 }
@@ -528,6 +538,7 @@ interface HttpRequestOptions {
   cookies?: Record<string, string>;
   timeoutMs: number;
   signal?: AbortSignal;
+  ctx?: EngineContext;
 }
 
 interface HttpOptions extends HttpRequestOptions {
@@ -555,6 +566,8 @@ async function httpPost(
 
 const MAX_ENGINE_RESPONSE_BYTES = 5 * 1024 * 1024;
 const ENGINE_RETRY_BACKOFF_MS = 250;
+const MAX_ENGINE_HOPS = 5;
+const DEFAULT_ENGINE_TRANSPORT: FetchTransport = "off";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -578,10 +591,84 @@ async function readBodyCapped(response: Response): Promise<string | null> {
   return new TextDecoder("utf-8").decode(Buffer.concat(chunks));
 }
 
-function mapFetchError(err: unknown): never {
-  if (err instanceof DOMException && err.name === "TimeoutError") throw new SearchTimeoutError();
-  if (err instanceof DOMException && err.name === "AbortError") throw new SearchCancelled();
-  throw err;
+interface EngineHopResponse {
+  status: number;
+  location: string | null;
+  body: string | null;
+}
+
+type EngineTransportKind = "direct" | "tls";
+
+function engineTransportOrder(transport: FetchTransport, target: URL): EngineTransportKind[] {
+  if (transport === "off" || socksProxyForUrl(target) !== null) return ["direct"];
+  return transport === "direct-first" ? ["direct", "tls"] : ["tls", "direct"];
+}
+
+function engineTargetAllowed(target: string, policy: WebsitePolicy | null): boolean {
+  const [allowed, , hostname] = checkUrlAccess(target, policy);
+  if (!allowed) return false;
+  const isLiteral = hostname.includes(":") || /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
+  return !isLiteral || isPublicIp(hostname);
+}
+
+function classifyRequestError(
+  err: unknown,
+  caller: AbortSignal | undefined,
+  hopSignal: AbortSignal,
+): Error | null {
+  if (caller?.aborted) return new SearchCancelled();
+  if (hopSignal.aborted) return new SearchTimeoutError();
+  if (err instanceof DOMException && err.name === "TimeoutError") return new SearchTimeoutError();
+  if (err instanceof DOMException && err.name === "AbortError") return new SearchTimeoutError();
+  if (err instanceof Error && err.message === "timed out") return new SearchTimeoutError();
+  if (err instanceof Error && err.message === "cancelled") return new SearchCancelled();
+  return null;
+}
+
+async function directEngineHop(
+  target: URL,
+  headers: Record<string, string>,
+  method: string,
+  body: string | undefined,
+  signal: AbortSignal,
+): Promise<EngineHopResponse | null> {
+  const response = await fetch(target.toString(), { method, headers, body, signal, redirect: "manual" });
+  if (response.status === 200) {
+    const text = await readBodyCapped(response);
+    return text === null ? null : { status: 200, location: null, body: text };
+  }
+  try {
+    await response.body?.cancel();
+  } catch {}
+  return { status: response.status, location: response.headers.get("location"), body: null };
+}
+
+function tlsEngineHop(
+  impersonate: EngineImpersonation,
+  target: URL,
+  headers: Record<string, string>,
+  method: string,
+  body: string | undefined,
+  caller: AbortSignal | undefined,
+  timeoutMs: number,
+): Promise<EngineHopResponse | null> {
+  return impersonate({
+    url: target,
+    timeoutMs,
+    signal: caller,
+    maxBytes: MAX_ENGINE_RESPONSE_BYTES,
+    maxPdfBytes: MAX_ENGINE_RESPONSE_BYTES,
+    method,
+    body,
+    extraHeaders: headers,
+  }).then((response) => {
+    if (response === null || response.truncated) return null;
+    return {
+      status: response.status,
+      location: response.headers.location ?? null,
+      body: response.status === 200 ? new TextDecoder("utf-8").decode(response.body) : null,
+    };
+  });
 }
 
 async function httpFetch(
@@ -601,32 +688,67 @@ async function httpFetch(
     : null;
   if (cookie) headers["Cookie"] = cookie;
   const timeoutMs = Math.min(MAX_SIGNAL_TIMEOUT_MS, Math.max(1, options.timeoutMs));
-  const signals: AbortSignal[] = [AbortSignal.timeout(timeoutMs)];
-  if (options.signal) signals.push(options.signal);
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: options.method ?? "GET",
-      headers,
-      body: options.method === "POST" ? options.body : undefined,
-      signal: AbortSignal.any(signals),
-    });
-  } catch (err) {
-    throw mapFetchError(err);
-  }
-  if (response.status !== 200) {
-    try {
-      await response.body?.cancel();
-    } catch {
+  const deadline = Date.now() + timeoutMs;
+  const caller = options.signal;
+  const transport = options.ctx?.transport ?? DEFAULT_ENGINE_TRANSPORT;
+  const policy = options.ctx?.policy ?? null;
+  const impersonate = options.ctx?.impersonate ?? (transport === "off" ? null : impersonatedRequest);
+  let method = options.method ?? "GET";
+  let body = method === "POST" ? options.body : undefined;
+  let target = url;
+  for (let hop = 0; hop < MAX_ENGINE_HOPS; hop++) {
+    if (caller?.aborted) throw new SearchCancelled();
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new SearchTimeoutError();
+    const targetUrl = new URL(target);
+    const hopSignal = caller
+      ? AbortSignal.any([caller, AbortSignal.timeout(remaining)])
+      : AbortSignal.timeout(remaining);
+    let response: EngineHopResponse | null = null;
+    let failure: unknown = null;
+    for (const kind of engineTransportOrder(transport, targetUrl)) {
+      try {
+        let attempt: EngineHopResponse | null = null;
+        if (kind === "tls") {
+          if (impersonate !== null) {
+            attempt = await tlsEngineHop(impersonate, targetUrl, headers, method, body, caller, remaining);
+          }
+        } else {
+          attempt = await directEngineHop(targetUrl, headers, method, body, hopSignal);
+        }
+        if (attempt === null) continue;
+        if (response === null || (attempt.status < 400 && response.status >= 400)) response = attempt;
+        if (attempt.status < 400) break;
+      } catch (err) {
+        const mapped = classifyRequestError(err, caller, hopSignal);
+        if (mapped) throw mapped;
+        failure = err;
+      }
+    }
+    if (response === null) {
+      if (failure) throw failure;
       return null;
     }
-    return null;
+    if (response.status >= 300 && response.status < 400) {
+      if (!response.location) return null;
+      let next: string;
+      try {
+        next = new URL(response.location, target).toString();
+      } catch {
+        return null;
+      }
+      if (!engineTargetAllowed(next, policy)) return null;
+      if (response.status !== 307 && response.status !== 308) {
+        method = "GET";
+        body = undefined;
+      }
+      target = next;
+      continue;
+    }
+    if (response.status !== 200) return null;
+    return response.body ?? "";
   }
-  try {
-    return await readBodyCapped(response);
-  } catch (err) {
-    throw mapFetchError(err);
-  }
+  return null;
 }
 
 const DUCKDUCKGO: Engine = {
@@ -636,7 +758,7 @@ const DUCKDUCKGO: Engine = {
     const html = await httpPost(
       "https://html.duckduckgo.com/html/",
       { q: query, b: "", l: ctx.region },
-      { headers: { "User-Agent": randomUserAgent() }, timeoutMs, signal },
+      { headers: { "User-Agent": randomUserAgent() }, timeoutMs, signal, ctx },
     );
     if (!html) return null;
     const results = extractResults(html, "//div[contains(@class, 'body')]", {
@@ -660,7 +782,7 @@ const BRAVE: Engine = {
     const html = await httpGet(
       "https://search.brave.com/search",
       { q: query, source: "web" },
-      { cookies, timeoutMs, signal },
+      { cookies, timeoutMs, signal, ctx },
     );
     if (!html) return null;
     return extractResults(html, "//div[@data-type='web']", {
@@ -693,6 +815,7 @@ const GOOGLE: Engine = {
         cookies: { CONSENT: "YES+" },
         timeoutMs,
         signal,
+        ctx,
       },
     );
     if (!html) return null;
@@ -722,7 +845,7 @@ const MOJEEK: Engine = {
     const html = await httpGet(
       "https://www.mojeek.com/search",
       params,
-      { cookies: { arc: country, lb: lang }, timeoutMs, signal },
+      { cookies: { arc: country, lb: lang }, timeoutMs, signal, ctx },
     );
     if (!html) return null;
     return extractResults(html, "//ul[contains(@class, 'results')]/li", {
@@ -736,13 +859,13 @@ const MOJEEK: Engine = {
 const YAHOO: Engine = {
   name: "yahoo",
   provider: "bing",
-  async search(query, _ctx, timeoutMs, signal) {
+  async search(query, ctx, timeoutMs, signal) {
     const ylt = tokenUrlSafe(18);
     const ylu = tokenUrlSafe(35);
     const html = await httpGet(
       `https://search.yahoo.com/search;_ylt=${ylt};_ylu=${ylu}`,
       { p: query },
-      { timeoutMs, signal },
+      { timeoutMs, signal, ctx },
     );
     if (!html) return null;
     const results = extractResults(html, "//div[contains(@class, 'relsrch')]", {
@@ -762,12 +885,12 @@ const YAHOO: Engine = {
 const YANDEX: Engine = {
   name: "yandex",
   provider: "yandex",
-  async search(query, _ctx, timeoutMs, signal) {
+  async search(query, ctx, timeoutMs, signal) {
     const searchid = 1000000 + Math.floor(Math.random() * 9000000);
     const html = await httpGet(
       "https://yandex.com/search/site/",
       { text: query, web: "1", searchid: String(searchid) },
-      { timeoutMs, signal },
+      { timeoutMs, signal, ctx },
     );
     if (!html) return null;
     return extractResults(html, "//li[contains(@class, 'serp-item')]", {
@@ -788,7 +911,7 @@ const WIKIPEDIA: Engine = {
     const encoded = encodeURIComponent(query);
     const opensearchUrl =
       `https://${lang}.wikipedia.org/w/api.php?action=opensearch&profile=fuzzy&limit=1&search=${encoded}`;
-    const opensearch = await httpGet(opensearchUrl, {}, { timeoutMs, signal });
+    const opensearch = await httpGet(opensearchUrl, {}, { timeoutMs, signal, ctx });
     if (!opensearch) return null;
     let data: unknown;
     try {
@@ -804,7 +927,7 @@ const WIKIPEDIA: Engine = {
     const extractUrl =
       `https://${lang}.wikipedia.org/w/api.php?action=query&format=json&prop=extracts` +
       `&titles=${encodeURIComponent(title)}&explaintext=0&exintro=0&redirects=1`;
-    const extract = await httpGet(extractUrl, {}, { timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), signal });
+    const extract = await httpGet(extractUrl, {}, { timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), signal, ctx });
     if (extract) {
       try {
         const pageData = JSON.parse(extract) as {
@@ -938,13 +1061,20 @@ export async function autoTextSearch(
   maxResults: number,
   timeoutMs: number,
   signal?: AbortSignal,
+  options: SearchEngineOptions = {},
 ): Promise<SearchResult[]> {
   const started = Date.now();
   const engines = shuffledEngines();
   const deadline = started + timeoutMs;
   const seenProviders = new Set<string>();
   const aggregator = new ResultsAggregator();
-  const ctx: EngineContext = { region: "us-en", safesearch: "moderate" };
+  const ctx: EngineContext = {
+    region: "us-en",
+    safesearch: "moderate",
+    transport: options.transport ?? DEFAULT_ENGINE_TRANSPORT,
+    policy: options.policy ?? null,
+    impersonate: options.impersonate,
+  };
   const controller = new AbortController();
   let onAbort: (() => void) | undefined;
   if (signal) {

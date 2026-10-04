@@ -10,7 +10,7 @@ import {
   type FetchPageOutcome,
 } from "./web-fetch.ts";
 import { renderPageWithLightpanda as defaultRenderLocalPageText } from "./lightpanda.ts";
-import { loadDefaultFetchSettings, loadDefaultFetchTimeoutMs, loadLightpandaSettings } from "./settings.ts";
+import { loadDefaultFetchSettings, loadLightpandaSettings } from "./settings.ts";
 
 function toolCallLine(theme: Theme, name: string, detail: string) {
   const line = theme.fg("toolTitle", theme.bold(name)) + (detail ? ` ${theme.fg("accent", detail)}` : "");
@@ -179,12 +179,14 @@ export function createWebTools(deps: WebToolsDeps = {}) {
         onUpdate?.({ content: [{ type: "text", text: "Searching the web..." }], details: {} });
         const timeoutParam = positiveNumber(params.timeoutMs);
         const searchCwd = (_ctx as ExtensionContext | undefined)?.cwd;
-        const searchTimeoutMs = timeoutParam ?? (await loadDefaultFetchTimeoutMs(searchCwd)) ?? SEARCH_TIMEOUT_MS;
+        const searchSettings = await loadDefaultFetchSettings(searchCwd);
+        const searchTimeoutMs = timeoutParam ?? searchSettings.timeoutMs ?? SEARCH_TIMEOUT_MS;
         const text = await webSearch(params.query, {
           signal: signal ?? undefined,
           timeoutMs: searchTimeoutMs,
           maxResults: positiveNumber(params.maxResults),
           cwd: searchCwd,
+          transport: searchSettings.transport,
         });
         return { content: [{ type: "text", text }], details: {} };
       },
