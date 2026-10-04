@@ -172,8 +172,8 @@ third-party rendering service.
   still gets its chance.
 - Lightpanda identifies itself honestly and refuses to impersonate a browser user agent, so hard
   anti-bot walls are returned as failures (the direct error, or the incomplete-content note).
-- Binary resolution: `lightpanda` on `PATH`, then `PI_LIGHTPANDA_BIN`, then
-  `webRender.lightpandaPath`. Prebuilt binaries exist for Linux (glibc; musl needs a source
+- Binary resolution: `webRender.lightpandaPath`, then `PI_LIGHTPANDA_BIN`, then
+  `lightpanda` on `PATH`. Prebuilt binaries exist for Linux (glibc; musl needs a source
   build) and macOS, plus Docker images; Windows needs WSL2.
 - Version matters: 1.0.0 renders JavaScript-heavy pages that the 0.2.x line cannot — measured on
   the same machine, IMDb went from a 76-byte empty document to 21k characters, dribbble from 32
@@ -186,7 +186,9 @@ third-party rendering service.
 - `bash scripts/install-lightpanda.sh` installs the newest stable release. When the system glibc
   predates what the binary needs, it downloads Debian's `libc6` for the current stable suite,
   extracts it into the install directory, and writes a launcher shim — so 1.0.0 runs on a
-  glibc 2.36 host without touching the system libraries. The script prints the path to use.
+  glibc 2.36 host without touching the system libraries. It also writes
+  `webRender.lightpandaPath` into the global settings, so the extension picks the binary up with
+  no further setup; `--no-configure` skips that and `--print-path` prints the launcher path for CI.
 - Disable the tier with `webRender.lightpandaEnabled: false`; `web_fetch` then stops after the
   network attempts and reports the original error.
 
@@ -354,29 +356,8 @@ npm test
 npm run test:unit
 npm run test:smoke
 bash scripts/install-lightpanda.sh
-npm run compare:fetch
-npm run compare:browsers
 npm run camoufox:warmup
-npm run stealth:matrix
-/tmp/pyenv/bin/python scripts/stealth-python.py
 ```
-
-`npm run compare:fetch` runs a live head-to-head of the direct fetch, the TLS-impersonation retry,
-local Lightpanda rendering over a target list. It accepts URLs as arguments and `--no-lightpanda`
-to drop the render tier. `npm run compare:browsers` adds a Camoufox column;
-install it separately (`npm i camoufox-js playwright-core && npx camoufox-js fetch`, plus GTK3
-libraries on Linux) and use `--seconds=N` to bound how long it waits out a JS challenge.
-`npm run stealth:matrix` compares stealth-browser options against one walled page (plus
-`bot.sannysoft.com` detection rows and a plain-page sanity check): raw CDP to a system Chromium
-(`PI_CHROMIUM_BIN` to point at it), Playwright with its bundled Chromium, Patchright, and Camoufox.
-Every browser dependency is loaded through a guarded dynamic import, so nothing is added to
-`package.json`; install whichever rows you want to measure. `--attempts=N` and `--seconds=N` bound
-the walled-page attempts, and passing row names runs a subset (`raw-cdp`, `playwright`, `patchright`,
-`camoufox`).
-
-`scripts/stealth-python.py` is the same idea for the Python-side options (nodriver, CloakBrowser,
-DrissionPage, cloudscraper, curl_cffi) against the same walled page; it needs a venv with those
-packages installed and is not wired into any npm script. Measured findings are in its module docstring.
 
 `npm run camoufox:warmup` measures what a warm Camoufox costs and buys: launch time, idle CPU and
 RSS, per-fetch latency with the browser already running, and whether a persistent profile

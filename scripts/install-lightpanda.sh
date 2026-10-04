@@ -10,6 +10,7 @@ VERSION=""
 FORCE=0
 ALLOW_SHIM=1
 PRINT_PATH=0
+NO_CONFIGURE=0
 
 usage() {
   cat <<'EOF'
@@ -23,12 +24,15 @@ Usage: bash scripts/install-lightpanda.sh [options]
   --force        Reinstall even when a working binary is already present
   --no-shim      Fail instead of bundling a newer libc when the system glibc is too old
   --print-path   Print only the launcher path (for scripts and CI)
+  --no-configure Skip writing webRender.lightpandaPath into the global settings
   -h, --help     Show this message
 
 On Linux, if the release needs a newer glibc than the system provides, the script
 downloads Debian's libc6 for the current stable suite, extracts it into the install
-directory, and writes a launcher shim that runs the binary with that libc. Point
-`webRender.lightpandaPath` (settings.json) or `PI_LIGHTPANDA_BIN` at the printed path.
+directory, and writes a launcher shim that runs the binary with that libc.
+The script also writes `webRender.lightpandaPath` into the global settings so the
+extension picks the binary up with no further setup; `--no-configure` skips that,
+and `--print-path` prints only the launcher path for scripts and CI.
 EOF
 }
 
@@ -39,6 +43,7 @@ for arg in "$@"; do
     --force) FORCE=1 ;;
     --no-shim) ALLOW_SHIM=0 ;;
     --print-path) PRINT_PATH=1 ;;
+    --no-configure) NO_CONFIGURE=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $arg" >&2; usage >&2; exit 2 ;;
   esac
@@ -100,11 +105,96 @@ mkdir -p "$DIR"
 binary="$DIR/lightpanda"
 shim="$DIR/lightpanda-run"
 
+settings_file_for_agent() {
+  local agent_dir="${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}"
+  case "$agent_dir" in
+    "~") agent_dir="$HOME" ;;
+    "~/"*) agent_dir="$HOME/${agent_dir#\~/}" ;;
+  esac
+  printf '%s\n' "$agent_dir/settings.json"
+}
+
+configure_renderer() {
+  local binary_path="$1"
+  local settings_file
+  local status
+  settings_file="$(settings_file_for_agent)"
+  if [ "$NO_CONFIGURE" = 1 ]; then
+    echo "settings:   skipped (--no-configure); set PI_LIGHTPANDA_BIN or webRender.lightpandaPath to $binary_path"
+    return
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    echo "settings:   node not found; set PI_LIGHTPANDA_BIN=$binary_path or webRender.lightpandaPath yourself" >&2
+    return
+  fi
+  status="$(SETTINGS_FILE="$settings_file" LIGHTPANDA_PATH="$binary_path" node --input-type=module <<'NODE'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+
+const settingsFile = process.env.SETTINGS_FILE;
+const binaryPath = process.env.LIGHTPANDA_PATH;
+function fail(message) {
+  console.error(message);
+  process.exit(3);
+}
+
+let settings = {};
+let mode;
+if (existsSync(settingsFile)) {
+  try {
+    settings = JSON.parse(readFileSync(settingsFile, "utf8"));
+  } catch {
+    fail(`settings:   keeping ${settingsFile}: not valid JSON`);
+  }
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    fail(`settings:   keeping ${settingsFile}: not a JSON object`);
+  }
+  mode = statSync(settingsFile).mode & 0o777;
+}
+
+const sections = [settings.unslothWebTools, settings.webRender].filter(
+  (section) => section && typeof section === "object" && !Array.isArray(section),
+);
+const alreadyConfigured = sections.some(
+  (section) =>
+    (typeof section.lightpandaPath === "string" && section.lightpandaPath.length > 0) ||
+    (Array.isArray(section.lightpandaCommand) && section.lightpandaCommand.length > 0),
+);
+if (alreadyConfigured) {
+  console.log("kept");
+  process.exit(0);
+}
+
+if (settings.webRender !== undefined && (!settings.webRender || typeof settings.webRender !== "object" || Array.isArray(settings.webRender))) {
+  fail(`settings:   keeping ${settingsFile}: webRender is not a JSON object`);
+}
+
+settings.webRender = { ...(settings.webRender ?? {}), lightpandaPath: binaryPath };
+const temporary = `${settingsFile}.tmp.${process.pid}`;
+try {
+  mkdirSync(dirname(settingsFile), { recursive: true });
+  writeFileSync(temporary, JSON.stringify(settings, null, 2) + "\n", mode === undefined ? {} : { mode });
+  renameSync(temporary, settingsFile);
+} catch (error) {
+  rmSync(temporary, { force: true });
+  fail(`settings:   keeping ${settingsFile}: ${error instanceof Error ? error.message : String(error)}`);
+}
+console.log("configured");
+NODE
+)" || status=""
+  case "$status" in
+    configured) echo "settings:   ${settings_file} now sets webRender.lightpandaPath" ;;
+    kept) echo "settings:   ${settings_file} already configures a lightpanda path or command; left unchanged" ;;
+    *) echo "settings:   could not update ${settings_file} automatically" >&2 ;;
+  esac
+}
+
 report_path() {
   if [ "$PRINT_PATH" = 1 ]; then
     printf '%s\n' "$1"
   else
     echo "already installed and working: $1" >&2
+    configure_renderer "$1"
   fi
   exit 0
 }
@@ -200,7 +290,5 @@ fi
 echo
 echo "Lightpanda $installed_version installed"
 echo "  run this:          $run_path"
-echo "  configure one of:"
-echo "    export PI_LIGHTPANDA_BIN=$run_path"
-echo "    settings.json:   { \"webRender\": { \"lightpandaPath\": \"$run_path\" } }"
 echo "  verify:            $run_path fetch --dump markdown --wait-until networkidle https://example.com/"
+configure_renderer "$run_path"
