@@ -479,23 +479,6 @@ export function extractResults(
   return results;
 }
 
-function googleUserAgent(): string {
-  const devices: [string, string, number, number][] = [
-    ["5.0", "SM-G900P Build/LRX21T", 39, 60],
-    ["6.0", "Nexus 5 Build/MRA58N", 39, 60],
-    ["8.0", "Pixel 2 Build/OPD3.170816.012", 39, 60],
-  ];
-  const [androidVer, device, chromeMin, chromeMax] = devices[Math.floor(Math.random() * devices.length)];
-  const chromeMajor = chromeMin + Math.floor(Math.random() * (chromeMax - chromeMin + 1));
-  const chromeBuild = 1000 + Math.floor(Math.random() * 9000);
-  const chromePatch = 1000 + Math.floor(Math.random() * 1000);
-  return (
-    `Mozilla/5.0 (Linux; Android ${androidVer}; ${device}) ` +
-    `AppleWebKit/537.36 (KHTML, like Gecko) ` +
-    `Chrome/${chromeMajor}.0.${chromeBuild}.${chromePatch} Mobile Safari/537.36`
-  );
-}
-
 export type EngineImpersonation = (options: TlsHopOptions) => Promise<TlsHopResponse | null>;
 
 export interface SearchEngineOptions {
@@ -759,71 +742,6 @@ const DUCKDUCKGO: Engine = {
   },
 };
 
-const BRAVE: Engine = {
-  name: "brave",
-  provider: "brave",
-  async search(query, ctx, timeoutMs, signal) {
-    const country = ctx.region.toLowerCase().split("-")[0];
-    const cookies: Record<string, string> = { [country]: country, useLocation: "0" };
-    if (ctx.safesearch !== "moderate") {
-      cookies["safesearch"] = ctx.safesearch === "on" ? "strict" : "off";
-    }
-    const html = await httpGet(
-      "https://search.brave.com/search",
-      { q: query, source: "web" },
-      { cookies, timeoutMs, signal, ctx },
-    );
-    if (!html) return null;
-    return extractResults(html, "//div[@data-type='web']", {
-      title:
-        ".//div[(contains(@class,'title') or contains(@class,'sitename-container')) and position()=last()]//text()",
-      href: ".//a[div[contains(@class, 'title')]]/@href",
-      body: ".//div[contains(@class, 'snippet')]//div[contains(@class, 'content')]//text()",
-    });
-  },
-};
-
-const GOOGLE: Engine = {
-  name: "google",
-  provider: "google",
-  async search(query, ctx, timeoutMs, signal) {
-    const [country, lang] = ctx.region.split("-");
-    const safesearchBase: Record<string, string> = { on: "2", moderate: "1", off: "0" };
-    const html = await httpGet(
-      "https://www.google.com/search",
-      {
-        q: query,
-        filter: safesearchBase[ctx.safesearch.toLowerCase()] ?? "1",
-        start: "0",
-        hl: `${lang}-${country.toUpperCase()}`,
-        lr: `lang_${lang}`,
-        cr: `country${country.toUpperCase()}`,
-      },
-      {
-        headers: { "User-Agent": googleUserAgent() },
-        cookies: { CONSENT: "YES+" },
-        timeoutMs,
-        signal,
-        ctx,
-      },
-    );
-    if (!html) return null;
-    const results = extractResults(html, "//div[@data-hveid][.//h3]", {
-      title: ".//h3//text()",
-      href: ".//a[.//h3]/@href",
-      body: "./div/div[last()]//text()",
-    });
-    return results
-      .map((r) => {
-        if (r.href.startsWith("/url?q=")) {
-          r.href = r.href.split("?q=")[1].split("&")[0];
-        }
-        return r;
-      })
-      .filter((r) => r.title && r.href.startsWith("http"));
-  },
-};
-
 const YANDEX: Engine = {
   name: "yandex",
   provider: "yandex",
@@ -905,7 +823,7 @@ const START_PAGE: Engine = {
   },
 };
 
-export const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, BRAVE, GOOGLE, YANDEX, WIKIPEDIA, START_PAGE];
+export const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, YANDEX, WIKIPEDIA, START_PAGE];
 
 export class ResultsAggregator {
   private cache = new Map<string, SearchResult>();

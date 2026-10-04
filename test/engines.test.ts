@@ -473,7 +473,7 @@ describe("engine retry", () => {
       }),
     );
     await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(SearchTimeoutError);
-    expect(calls).toBe(6);
+    expect(calls).toBe(4);
   });
 
   it("does not classify a retry that cannot start as a timeout", async () => {
@@ -497,7 +497,7 @@ describe("engine retry", () => {
       }),
     );
     await expect(autoTextSearch("cat", 5, 400)).rejects.toThrow(EmptySweepError);
-    expect(calls).toBe(6);
+    expect(calls).toBe(4);
   });
 });
 
