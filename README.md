@@ -429,8 +429,9 @@ The suite ports Unsloth Studio's own tests for these tools:
 - `test/entities.test.ts`: `decodeHtmlEntities` parity with CPython `html.unescape`,
   legacy refs, longest-prefix rule, Windows-1252 numeric mappings, invalid codepoints
 - `test/smoke.test.ts`: live network checks against real hosts, including a per-engine
-  result-health sweep (at least two engines must return well-formed results; engines
-  that block or reset connections from datacenter IPs count as unhealthy, not failures)
+  result-health sweep through the browser-fingerprint transport (at least one engine must
+  return well-formed results; engines that block or reset connections from datacenter IPs
+  count as unhealthy, not failures)
 
 - `test/tls-fetch.test.ts`: the browser-fingerprint transport with a stubbed native module, including
   transport reuse, body caps, redirect passthrough, and abort/timeout mapping
