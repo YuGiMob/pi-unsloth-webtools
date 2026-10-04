@@ -7,10 +7,11 @@ import {
   TEXT_ENGINES,
   autoTextSearch,
   canonicalizeHref,
+  capByHost,
   extractResults,
   normalizeText,
   normalizeUrl,
-  rankResults,
+  registrableDomain,
   xpathNodes,
   xpathText,
 } from "../engines.ts";
@@ -20,7 +21,7 @@ function ddgResultsHtml(count: number): string {
   return Array.from(
     { length: count },
     (_, i) =>
-      `<div class="result"><div class="body"><h2><a href="https://example.com/${i}">Result ${i}</a></h2><a href="https://example.com/${i}">Snippet ${i}.</a></div></div>`
+      `<div class="result"><div class="body"><h2><a href="https://example-${i}.com/${i}">Result ${i}</a></h2><a href="https://example-${i}.com/${i}">Snippet ${i}.</a></div></div>`
   ).join("");
 }
 
@@ -145,7 +146,7 @@ describe("extractResults", () => {
 });
 
 describe("ResultsAggregator", () => {
-  it("dedupes by href, keeps the longer body, sorts by frequency", () => {
+  it("dedupes by href and keeps the longer body", () => {
     const aggregator = new ResultsAggregator();
     aggregator.extend([
       { title: "A", href: "https://x.com/1", body: "short" },
@@ -154,12 +155,12 @@ describe("ResultsAggregator", () => {
       { title: "B", href: "https://x.com/2", body: "body b" },
       { title: "B", href: "https://x.com/2", body: "body b" },
     ]);
-    const out = aggregator.extractDicts();
+    const out = aggregator.ranked();
     expect(out.length).toBe(2);
-    expect(out[0].href).toBe("https://x.com/2");
-    expect(out[0].body).toBe("body b");
-    expect(out[1].title).toBe("A2");
-    expect(out[1].body).toBe("a much longer body");
+    expect(aggregator.size).toBe(2);
+    expect(out[0].href).toBe("https://x.com/1");
+    expect(out[0].title).toBe("A2");
+    expect(out[0].body).toBe("a much longer body");
   });
 
   it("merges duplicates that differ only by tracking parameters", () => {
@@ -169,7 +170,7 @@ describe("ResultsAggregator", () => {
       { title: "A", href: "https://x.com/p?utm_source=news&utm_medium=rss", body: "longer body" },
       { title: "A", href: "https://x.com/p", body: "longest body here" },
     ]);
-    const out = aggregator.extractDicts();
+    const out = aggregator.ranked();
     expect(out.length).toBe(1);
     expect(out[0].body).toBe("longest body here");
     expect(out[0].href).toBe("https://x.com/p");
@@ -181,81 +182,79 @@ describe("ResultsAggregator", () => {
       { title: "A", href: "https://x.com/p?page=1", body: "first" },
       { title: "A", href: "https://x.com/p?page=2", body: "second" },
     ]);
-    expect(aggregator.extractDicts().length).toBe(2);
+    expect(aggregator.ranked().length).toBe(2);
+  });
+
+  it("drops Wikimedia category pages", () => {
+    const aggregator = new ResultsAggregator();
+    aggregator.extend([
+      { title: "Category:Wikimedia cats", href: "https://x.com/5", body: "skip me" },
+      { title: "Keep me", href: "https://x.com/6", body: "keep" },
+    ]);
+    expect(aggregator.ranked().map((doc) => doc.href)).toEqual(["https://x.com/6"]);
+  });
+
+  it("ranks a result two engines returned above a single engine's deeper hit", () => {
+    const aggregator = new ResultsAggregator();
+    aggregator.extend([
+      { title: "deep", href: "https://a.example/deep", body: "" },
+      { title: "second", href: "https://a.example/second", body: "" },
+      { title: "shared", href: "https://shared.example/hit", body: "" },
+      { title: "fourth", href: "https://a.example/fourth", body: "" },
+    ]);
+    aggregator.extend([{ title: "shared", href: "https://shared.example/hit", body: "" }]);
+    expect(aggregator.ranked()[0].href).toBe("https://shared.example/hit");
+  });
+
+  it("honours engine weights", () => {
+    const aggregator = new ResultsAggregator();
+    aggregator.extend([{ title: "low", href: "https://low.example/a", body: "" }], 0.5);
+    aggregator.extend([{ title: "high", href: "https://high.example/b", body: "" }], 2);
+    expect(aggregator.ranked()[0].href).toBe("https://high.example/b");
+  });
+
+  it("breaks ties deterministically by href", () => {
+    const aggregator = new ResultsAggregator();
+    aggregator.extend([{ title: "z", href: "https://z.example/a", body: "" }]);
+    aggregator.extend([{ title: "a", href: "https://a.example/b", body: "" }]);
+    expect(aggregator.ranked().map((doc) => doc.href)).toEqual(["https://a.example/b", "https://z.example/a"]);
   });
 });
 
-describe("rankResults", () => {
-  it("puts wikipedia first, then token buckets", () => {
-    const docs = [
-      { title: "unrelated thing", href: "https://x.com/4", body: "nothing here at all" },
-      { title: "cats article", href: "https://x.com/1", body: "about cats" },
-      { title: "cats", href: "https://en.wikipedia.org/wiki/Cat", body: "the cat" },
-      { title: "cats only title", href: "https://x.com/2", body: "other" },
-      { title: "Category:Wikimedia cats", href: "https://x.com/5", body: "skip me" },
-    ];
-    const out = rankResults(docs, "cats");
-    expect(out.map((d) => d.href)).toEqual([
-      "https://en.wikipedia.org/wiki/Cat",
-      "https://x.com/1",
-      "https://x.com/2",
-      "https://x.com/4",
+describe("capByHost", () => {
+  const docs = [
+    { title: "1", href: "https://example.com/a", body: "" },
+    { title: "2", href: "https://www.example.com/b", body: "" },
+    { title: "3", href: "https://sub.example.com/c", body: "" },
+    { title: "4", href: "https://other.com/d", body: "" },
+  ];
+
+  it("caps results per registrable domain", () => {
+    expect(capByHost(docs, 10, 2).map((doc) => doc.href)).toEqual([
+      "https://example.com/a",
+      "https://www.example.com/b",
+      "https://other.com/d",
     ]);
   });
 
-  it("uses tokens of at least three characters", () => {
-    const docs = [
-      { title: "ab cd", href: "https://x.com/1", body: "ef gh" },
-      { title: "xyz", href: "https://x.com/2", body: "abc" },
-    ];
-    const out = rankResults(docs, "ab xyz");
-    expect(out.map((d) => d.href)).toEqual(["https://x.com/2", "https://x.com/1"]);
+  it("respects the result limit", () => {
+    expect(capByHost(docs, 2, 2).length).toBe(2);
+  });
+
+  it("treats zero as no cap", () => {
+    expect(capByHost(docs, 10, 0).length).toBe(4);
   });
 });
 
-describe("wikipedia engine", () => {
-  it("returns the opensearch hit with an extract body", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url.includes("opensearch")) {
-          return new Response(
-            JSON.stringify(["cat", ["Cat"], ["feline"], ["https://en.wikipedia.org/wiki/Cat"]]),
-            { status: 200 },
-          );
-        }
-        return new Response(
-          JSON.stringify({
-            query: { pages: { "1": { extract: "<p>The <b>cat</b> is a small mammal.</p>" } } },
-          }),
-          { status: 200 },
-        );
-      }),
-    );
-    const results = await autoTextSearch("cat", 5, 10_000);
-    expect(results.length).toBeGreaterThan(0);
-    expect(results[0].href).toBe("https://en.wikipedia.org/wiki/Cat");
-    expect(results[0].body).toContain("cat is a small mammal");
+describe("registrableDomain", () => {
+  it("strips www, subdomains and multi-part suffixes", () => {
+    expect(registrableDomain("https://www.example.com/a")).toBe("example.com");
+    expect(registrableDomain("https://news.bbc.co.uk/x")).toBe("bbc.co.uk");
+    expect(registrableDomain("not a url")).toBe("");
   });
+});
 
-  it("drops disambiguation hits", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url.includes("opensearch")) {
-          return new Response(
-            JSON.stringify(["cat", ["Cat"], [], ["https://en.wikipedia.org/wiki/Cat"]]),
-            { status: 200 },
-          );
-        }
-        return new Response(
-          JSON.stringify({ query: { pages: { "1": { extract: "Cat may refer to: ..." } } } }),
-          { status: 200 },
-        );
-      }),
-    );
-    await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(EmptySweepError);
-  });
+describe("sweep outcomes", () => {
 
   it("reports a timeout when every engine times out", async () => {
     vi.stubGlobal(
@@ -395,19 +394,19 @@ describe("sweep early exit", () => {
   it("aborts in-flight engines once enough results arrive", async () => {
     const universal = Array.from({ length: 5 }, (_, i) =>
       [
-        `<div class="result"><div class="body"><h2><a href="https://example.com/d${i}">D${i}</a></h2><a href="https://example.com/d${i}">Snippet ${i}.</a></div></div>`,
-        `<div data-type="web"><a href="https://example.com/b${i}"><div class="title">B${i}</div></a></div>`,
-        `<div data-hveid="x"><a href="https://example.com/g${i}"><h3>G${i}</h3></a></div>`,
-        `<ul class="results"><li><h2><a href="https://example.com/m${i}">M${i}</a></h2><p class="s">snippet</p></li></ul>`,
-        `<div class="relsrch"><div class="Title"><h3><a href="https://example.com/y${i}">Y${i}</a></h3></div><div class="Text">text</div></div>`,
-        `<li class="serp-item"><h3><a href="https://example.com/x${i}">X${i}</a></h3><div class="text">snippet</div></li>`,
+        `<div class="result"><div class="body"><h2><a href="https://d${i}.example/hit">D${i}</a></h2><a href="https://d${i}.example/hit">Snippet ${i}.</a></div></div>`,
+        `<div data-type="web"><a href="https://b${i}.example/hit"><div class="title">B${i}</div></a></div>`,
+        `<div data-hveid="x"><a href="https://g${i}.example/hit"><h3>G${i}</h3></a></div>`,
+        `<ul class="results"><li><h2><a href="https://m${i}.example/hit">M${i}</a></h2><p class="s">snippet</p></li></ul>`,
+        `<div class="relsrch"><div class="Title"><h3><a href="https://y${i}.example/hit">Y${i}</a></h3></div><div class="Text">text</div></div>`,
+        `<li class="serp-item"><h3><a href="https://x${i}.example/hit">X${i}</a></h3><div class="text">snippet</div></li>`,
       ].join(""),
     ).join("");
     let aborted = false;
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string, opts?: RequestInit) => {
-        if (String(url).includes("wikipedia.org")) {
+        if (String(url).includes("yandex.com")) {
           return new Promise((_resolve, reject) => {
             opts?.signal?.addEventListener("abort", () => {
               aborted = true;
@@ -473,7 +472,7 @@ describe("engine retry", () => {
       }),
     );
     await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(SearchTimeoutError);
-    expect(calls).toBe(4);
+    expect(calls).toBe(3);
   });
 
   it("does not classify a retry that cannot start as a timeout", async () => {
@@ -497,7 +496,7 @@ describe("engine retry", () => {
       }),
     );
     await expect(autoTextSearch("cat", 5, 400)).rejects.toThrow(EmptySweepError);
-    expect(calls).toBe(4);
+    expect(calls).toBe(3);
   });
 });
 
@@ -551,5 +550,35 @@ describe("engine selection", () => {
     );
     await expect(autoTextSearch("cat", 5, 10_000, undefined, { engines: ["nope"] })).rejects.toThrow(EmptySweepError);
     expect(calls.length).toBeGreaterThan(1);
+  });
+
+  it("applies maxPerHost to the returned results", async () => {
+    const sameHost = Array.from(
+      { length: 4 },
+      (_, i) =>
+        `<div class="result"><div class="body"><h2><a href="https://one.example/p${i}">R${i}</a></h2><a href="https://one.example/p${i}">S${i}</a></div></div>`,
+    ).join("");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(sameHost, { status: 200 })),
+    );
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, { engines: ["duckduckgo"], maxPerHost: 2 });
+    expect(results.length).toBe(2);
+    expect(results.every((result) => new URL(result.href).hostname === "one.example")).toBe(true);
+  });
+
+  it("orders results by engine weight", async () => {
+    const ddgHtml =
+      '<div class="result"><div class="body"><h2><a href="https://ddg.example/a">D</a></h2><a href="https://ddg.example/a">snippet</a></div></div>';
+    const startpageHtml = '<div class="result"><a href="https://start.example/b"><h2>S</h2></a><p>snippet</p></div>';
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => new Response(String(url).includes("startpage.com") ? startpageHtml : ddgHtml, { status: 200 })),
+    );
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, {
+      engines: ["duckduckgo", "startpage"],
+      engineWeights: { startpage: 3 },
+    });
+    expect(results.map((result) => result.href)).toEqual(["https://start.example/b", "https://ddg.example/a"]);
   });
 });

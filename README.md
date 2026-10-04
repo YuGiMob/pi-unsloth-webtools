@@ -38,14 +38,15 @@ Both tools display their target in the TUI tool row: `web_search "query"` and `w
 
 Mirrors Unsloth Studio's `web_search` tool:
 
-- Searches like Studio's pinned `ddgs==9.14.4` `DDGS.text()`: a subset of the Studio engines
-  (duckduckgo, yandex, wikipedia; the others are behind bot walls, see
+- Searches like Studio's pinned `ddgs==9.14.4` `DDGS.text()`: the Studio engines that still work
+  here (duckduckgo, yandex; the others are behind bot walls, see
   [Known differences from Studio](#known-differences-from-studio)) plus startpage,
-  the same provider deduplication, href-dedupe aggregator with frequency ordering (hrefs are
+  the same provider deduplication, and an href-dedupe aggregator (hrefs are
   canonicalized first — `utm_*`/tracking parameters and fragments are dropped and the URL is
   re-serialized, collapsing host-case, default-port, and trailing-slash variants — so the
-  same page found via different tracking links collapses), and the same `SimpleFilterRanker`
-  re-ranking. Formats results identically: `Title:` / `URL:` /
+  same page found via different tracking links collapses). Results are fused with weighted
+  reciprocal-rank fusion: each engine's own ordering, not a keyword guess, decides relevance,
+  and the fused list is capped per registrable domain. Formats results identically:
   `Snippet:` blocks separated by `---`, ending with the hint to call `web_fetch` to
   read a full page.
 - Rate-limit, timeout, and empty-result messages mirror Studio's `_search_failure_message`.
@@ -234,11 +235,20 @@ third-party rendering service.
   through the browser-fingerprint transport and the fallback's browser headers, but not a bare
   Node `fetch`. Startpage's POST endpoint and its safesearch parameter are challenge-gated and are
   not used.
-- Unused engines: mojeek, yahoo, google and brave are not part of the sweep. A non-JavaScript
-  client cannot get past mojeek (JavaScript challenge) or yahoo (`_bv` bot beacon), and google and
-  brave answer rate limits and bot interstitials instead of results (HTTP 429 in testing) — while
-  startpage already covers Google's index. The remaining four engines can be narrowed further per
-  machine with `webSearch.engines` (see Configuration).
+- Unused engines: mojeek, yahoo, google, brave and wikipedia are not part of the sweep. A
+  non-JavaScript client cannot get past mojeek (JavaScript challenge) or yahoo (`_bv` bot beacon),
+  google and brave answer rate limits and bot interstitials instead of results (HTTP 429 in
+  testing), and wikipedia is an API for a source the other engines already return — so the sweep
+  no longer spends a slot on it, and `wikipedia.org` results are ranked like any other instead of
+  being forced to the top. The remaining three engines can be narrowed further per machine with
+  `webSearch.engines` (see Configuration).
+- Ranking: Studio's `SimpleFilterRanker` (keyword buckets with `wikipedia.org` pinned first) is
+  replaced by weighted reciprocal-rank fusion over each engine's own ordering, capped per
+  registrable domain. On the `npm run engine:eval` query set that lifts mean precision@5 from 0.28
+  (keyword buckets) to 0.35 (uncapped, and 0.32 at the default cap) — the fusion keeps the ranking
+  signal the engines already computed instead of guessing from query substrings. Weights default to
+  uniform because the three engines overlap so little (mean Jaccard 0.07–0.22) that weighting mostly
+  decides which engine dominates the list rather than which result is better.
 - Empty sweeps: ddgs 9.14.4 raises the last engine exception; this port reports a
   timeout whenever any engine timed out, so the timeout message is not masked by later
   generic engine failures. The timeout budget bounds the entire sweep: per-engine
@@ -255,7 +265,7 @@ third-party rendering service.
   the document `<title>`. Studio keys on raw hrefs and returns the converted body alone.
 - Upstream drift: current ddgs ships ten backends (adding bing, startpage, grokipedia),
   requires a `vqd` token for DuckDuckGo, and exposes an `extract()` mode. This port
-  uses duckduckgo, yandex and wikipedia from the Studio snapshot plus startpage — bing stays
+  uses duckduckgo and yandex from the Studio snapshot plus startpage — bing stays
   disabled, no vqd, no pagination — so engine behavior matches Studio rather than ddgs head.
 
 ## When to use alternatives
@@ -328,7 +338,9 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `unslothWebTools.allowPrivateAddresses` / `webFetch.allowPrivateAddresses` | `true` | Opt out to restore the resolved-IP SSRF guard: private/loopback/link-local hosts (localhost, LAN IPs) are refused again. Non-canonical numeric IP encodings stay blocked either way |
 | `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
 | `webFetch.transport` / `unslothWebTools.transport` | `tls-first` | Transport order for `web_fetch` and `web_search` engine requests: `tls-first` (default), `direct-first`, or `off` to disable the browser-fingerprint transport entirely |
-| `webSearch.engines` / `unslothWebTools.engines` | all four (duckduckgo, yandex, wikipedia, startpage) | Restrict `web_search` to a subset of engine names, e.g. `["duckduckgo", "yandex"]`; unknown names are ignored, and a list that matches nothing falls back to every engine |
+| `webSearch.engines` / `unslothWebTools.engines` | all three (duckduckgo, yandex, startpage) | Restrict `web_search` to a subset of engine names, e.g. `["duckduckgo", "yandex"]`; unknown names are ignored, and a list that matches nothing falls back to every engine |
+| `webSearch.engineWeights` / `unslothWebTools.engineWeights` | all `1` | Per-engine fusion weight, e.g. `{"startpage": 2, "yandex": 0.5}`; only positive numbers are read |
+| `webSearch.maxPerHost` / `unslothWebTools.maxPerHost` | `4` | Most results one registrable domain may contribute; `0` disables the cap |
 | `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering |
 | `webRender.lightpandaPath` / `unslothWebTools.lightpandaPath` | launcher installed by `scripts/install-lightpanda.sh`, else `lightpanda` on `PATH` | Path to the Lightpanda binary used for local rendering |
 | `webRender.lightpandaCommand` / `unslothWebTools.lightpandaCommand` | none | Command prefix that launches the renderer, for WSL (`["wsl.exe","-e","<path>"]`) or containers; overrides `lightpandaPath`. The fetch flags are appended to it |
@@ -376,6 +388,7 @@ npm run test:unit
 npm run test:smoke
 bash scripts/install-lightpanda.sh
 npm run camoufox:warmup
+npm run engine:eval
 ```
 
 `npm run camoufox:warmup` measures what a warm Camoufox costs and buys: launch time, idle CPU and
@@ -383,6 +396,11 @@ RSS, per-fetch latency with the browser already running, and whether a persisten
 (`user_data_dir`, pinned fingerprint) lets a Cloudflare clearance survive a restart. Flags:
 `--virtual` for a virtual display, `--pin=0` to let Camoufox rotate fingerprints, `--seconds=N`,
 `--idle=N`.
+
+`npm run engine:eval` measures each search engine against a small hand-labelled developer query
+set: yield, latency and failures, pairwise URL overlap, unique contribution, and offline fusion
+simulations with candidate weight vectors. `--cache=FILE` reuses a previous run without touching
+the network; `--delay`, `--timeout`, `--max` and `--transport` tune the sweep.
 
 ## Tests
 
@@ -404,7 +422,7 @@ The suite ports Unsloth Studio's own tests for these tools:
 - `test/fetch-flow.test.ts`: GitHub README rewrite, deadline/cancellation, HTML sniffing
   (from `test_web_fetch_extraction.py`; the fetch client is injected via seams)
 - `test/engines.test.ts`: the ddgs engine port, normalizers, the XPath subset, the
-  aggregator, the ranker, and the Wikipedia engine with a stubbed fetch
+  reciprocal-rank aggregator, the per-host cap, and the Startpage engine with a stubbed fetch
 - `test/pdf-parity.test.ts`: MuPDF engine capabilities, PDF 1.5 object streams,
   ASCII85Decode, font `/Differences` encodings, pymupdf4llm-style headings/links/tables
 - `test/entities.test.ts`: `decodeHtmlEntities` parity with CPython `html.unescape`,

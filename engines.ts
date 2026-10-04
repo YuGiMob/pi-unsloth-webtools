@@ -486,6 +486,8 @@ export interface SearchEngineOptions {
   policy?: WebsitePolicy | null;
   impersonate?: EngineImpersonation;
   engines?: string[];
+  engineWeights?: Record<string, number>;
+  maxPerHost?: number;
 }
 
 export interface EngineContext extends SearchEngineOptions {
@@ -496,7 +498,6 @@ export interface EngineContext extends SearchEngineOptions {
 export interface Engine {
   name: string;
   provider: string;
-  priority?: number;
   search(
     query: string,
     ctx: EngineContext,
@@ -761,49 +762,6 @@ const YANDEX: Engine = {
   },
 };
 
-const WIKIPEDIA: Engine = {
-  name: "wikipedia",
-  provider: "wikipedia",
-  priority: 2,
-  async search(query, ctx, timeoutMs, signal) {
-    const started = Date.now();
-    const lang = ctx.region.toLowerCase().split("-")[1] ?? "en";
-    const encoded = encodeURIComponent(query);
-    const opensearchUrl =
-      `https://${lang}.wikipedia.org/w/api.php?action=opensearch&profile=fuzzy&limit=1&search=${encoded}`;
-    const opensearch = await httpGet(opensearchUrl, {}, { timeoutMs, signal, ctx });
-    if (!opensearch) return null;
-    let data: unknown;
-    try {
-      data = JSON.parse(opensearch);
-    } catch {
-      return null;
-    }
-    const payload = data as [string, string[], string[], string[]];
-    if (!payload[1] || !payload[1].length) return [];
-    const title = payload[1][0];
-    const href = payload[3][0];
-    let body = "";
-    const extractUrl =
-      `https://${lang}.wikipedia.org/w/api.php?action=query&format=json&prop=extracts` +
-      `&titles=${encodeURIComponent(title)}&explaintext=0&exintro=0&redirects=1`;
-    const extract = await httpGet(extractUrl, {}, { timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), signal, ctx });
-    if (extract) {
-      try {
-        const pageData = JSON.parse(extract) as {
-          query: { pages: Record<string, { extract?: string }> };
-        };
-        const pages = Object.values(pageData.query.pages);
-        if (pages.length) body = pages[0].extract ?? "";
-      } catch {
-        body = "";
-      }
-    }
-    if (body.includes("may refer to:")) return [];
-    return [{ title: normalizeText(title), href: normalizeUrl(href), body: normalizeText(body) }];
-  },
-};
-
 const START_PAGE: Engine = {
   name: "startpage",
   provider: "google",
@@ -823,17 +781,17 @@ const START_PAGE: Engine = {
   },
 };
 
-export const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, YANDEX, WIKIPEDIA, START_PAGE];
+export const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, YANDEX, START_PAGE];
 
 export class ResultsAggregator {
   private cache = new Map<string, SearchResult>();
-  private counter = new Map<string, number>();
+  private scores = new Map<string, number>();
 
   get size(): number {
     return this.cache.size;
   }
 
-  append(item: SearchResult): void {
+  append(item: SearchResult, weight = 1, rank = 1): void {
     if (typeof item.href !== "string" || !item.href.trim()) return;
     const key = canonicalizeHref(item.href);
     if (!key) return;
@@ -841,54 +799,66 @@ export class ResultsAggregator {
     if (!existing || item.body.length > existing.body.length) {
       this.cache.set(key, { ...item, href: key });
     }
-    this.counter.set(key, (this.counter.get(key) ?? 0) + 1);
+    this.scores.set(key, (this.scores.get(key) ?? 0) + weight / (RRF_RANK_CONSTANT + rank));
   }
 
-  extend(items: SearchResult[]): void {
-    for (const item of items) this.append(item);
+  extend(items: SearchResult[], weight = 1): void {
+    const seen = new Set<string>();
+    items.forEach((item, index) => {
+      const key = canonicalizeHref(item.href);
+      if (!key) return;
+      const first = !seen.has(key);
+      seen.add(key);
+      this.append(item, first ? weight : 0, index + 1);
+    });
   }
 
-  extractDicts(): SearchResult[] {
-    return [...this.counter.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([key]) => this.cache.get(key)!);
+  ranked(): SearchResult[] {
+    return [...this.cache.entries()]
+      .filter(([, doc]) => !isWikimediaCategory(doc))
+      .map(([key, doc]) => ({ doc, score: this.scores.get(key) ?? 0 }))
+      .sort((a, b) => b.score - a.score || a.doc.href.localeCompare(b.doc.href))
+      .map((entry) => entry.doc);
   }
 }
 
-function extractTokens(query: string): Set<string> {
-  return new Set(query.toLowerCase().split(/\W+/u).filter((t) => t.length >= 3));
-}
+const RRF_RANK_CONSTANT = 60;
+const DEFAULT_MAX_PER_HOST = 4;
+const MULTI_PART_SUFFIXES = new Set(["co.uk", "org.uk", "com.au", "co.jp", "co.nz", "com.br", "co.in"]);
 
-function hasAnyToken(text: string, tokens: Set<string>): boolean {
-  const lower = text.toLowerCase();
-  for (const token of tokens) {
-    if (lower.includes(token)) return true;
+export function registrableDomain(url: string): string {
+  let hostname = "";
+  try {
+    hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
   }
-  return false;
+  const parts = hostname.split(".");
+  if (parts.length < 2) return hostname;
+  const lastTwo = parts.slice(-2).join(".");
+  return MULTI_PART_SUFFIXES.has(lastTwo) && parts.length >= 3 ? parts.slice(-3).join(".") : lastTwo;
 }
 
-export function rankResults(docs: SearchResult[], query: string): SearchResult[] {
-  const tokens = extractTokens(query);
-  const wiki: SearchResult[] = [];
-  const both: SearchResult[] = [];
-  const titleOnly: SearchResult[] = [];
-  const bodyOnly: SearchResult[] = [];
-  const neither: SearchResult[] = [];
+export function capByHost(docs: SearchResult[], limit: number, maxPerHost: number): SearchResult[] {
+  if (limit <= 0) return [];
+  const perHost = new Map<string, number>();
+  const capped: SearchResult[] = [];
+  const allowed = maxPerHost > 0 ? maxPerHost : Number.POSITIVE_INFINITY;
   for (const doc of docs) {
-    if (doc.title.includes("Category:") && doc.title.includes("Wikimedia")) continue;
-    if (doc.href.includes("wikipedia.org")) {
-      wiki.push(doc);
-      continue;
-    }
-    const hitTitle = hasAnyToken(doc.title, tokens);
-    const hitBody = hasAnyToken(doc.body, tokens);
-    if (hitTitle && hitBody) both.push(doc);
-    else if (hitTitle) titleOnly.push(doc);
-    else if (hitBody) bodyOnly.push(doc);
-    else neither.push(doc);
+    const domain = registrableDomain(doc.href);
+    const used = perHost.get(domain) ?? 0;
+    if (used >= allowed) continue;
+    perHost.set(domain, used + 1);
+    capped.push(doc);
+    if (capped.length >= limit) break;
   }
-  return [...wiki, ...both, ...titleOnly, ...bodyOnly, ...neither];
+  return capped;
 }
+
+function isWikimediaCategory(doc: SearchResult): boolean {
+  return doc.title.includes("Category:") && doc.title.includes("Wikimedia");
+}
+
 async function recordSweepStats(query: string, maxResults: number, started: number, timedOutProviders: string[], resultCount: number): Promise<void> {
   const flag = process.env.PI_UNSLOTH_WEBTOOLS_STATS?.trim();
   if (!flag) return;
@@ -937,9 +907,7 @@ function shuffledEngines(engines: Engine[] = TEXT_ENGINES): Engine[] {
     const j = Math.floor(Math.random() * (i + 1));
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-  const wikipedia = shuffled.find((e) => e.priority === 2);
-  const rest = shuffled.filter((e) => e.priority !== 2);
-  return wikipedia ? [wikipedia, ...rest] : shuffled;
+  return shuffled;
 }
 
 export async function autoTextSearch(
@@ -954,6 +922,9 @@ export async function autoTextSearch(
   const deadline = started + timeoutMs;
   const seenProviders = new Set<string>();
   const aggregator = new ResultsAggregator();
+  const engineWeights = options.engineWeights ?? {};
+  const maxPerHost = options.maxPerHost ?? DEFAULT_MAX_PER_HOST;
+  const enough = () => capByHost(aggregator.ranked(), maxResults, maxPerHost).length >= maxResults;
   const ctx: EngineContext = {
     region: "us-en",
     safesearch: "moderate",
@@ -1014,18 +985,18 @@ export async function autoTextSearch(
       }
     }
     if (results && results.length) {
-      aggregator.extend(results);
+      aggregator.extend(results, engineWeights[engine.name] ?? 1);
       seenProviders.add(engine.provider);
-      if (aggregator.size >= maxResults) controller.abort();
+      if (enough()) controller.abort();
     }
   };
   while (i < engines.length || pending.size > 0) {
-    if (aggregator.size >= maxResults || cancelled) {
+    if (enough() || cancelled) {
       controller.abort();
       break;
     }
     while (i < engines.length && pending.size < maxWorkers) {
-      if (aggregator.size >= maxResults || cancelled) {
+      if (enough() || cancelled) {
         controller.abort();
         break;
       }
@@ -1043,7 +1014,7 @@ export async function autoTextSearch(
       );
     }
     if (pending.size === 0) break;
-    if (aggregator.size >= maxResults || cancelled) {
+    if (enough() || cancelled) {
       controller.abort();
       break;
     }
@@ -1052,10 +1023,10 @@ export async function autoTextSearch(
   await Promise.allSettled(pending);
   if (onAbort && signal) signal.removeEventListener("abort", onAbort);
   if (cancelled) throw new SearchCancelled();
-  const results = rankResults(aggregator.extractDicts(), query);
+  const results = capByHost(aggregator.ranked(), maxResults, maxPerHost);
   if (results.length) {
     void recordSweepStats(query, maxResults, started, [...timedOutProviders], results.length);
-    return results.slice(0, maxResults);
+    return results;
   }
   if (timedOutProviders.size) {
     const sorted = [...timedOutProviders].sort();

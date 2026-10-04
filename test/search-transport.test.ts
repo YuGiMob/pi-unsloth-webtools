@@ -10,7 +10,7 @@ function ddgPage(count: number): string {
   return Array.from(
     { length: count },
     (_, i) =>
-      `<div class="result"><div class="body"><h2><a href="https://example.com/${i}">Result ${i}</a></h2><a href="https://example.com/${i}">Snippet ${i}.</a></div></div>`,
+      `<div class="result"><div class="body"><h2><a href="https://example-${i}.com/${i}">Result ${i}</a></h2><a href="https://example-${i}.com/${i}">Snippet ${i}.</a></div></div>`,
   ).join("");
 }
 

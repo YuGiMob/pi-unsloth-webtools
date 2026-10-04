@@ -50,6 +50,26 @@ function pickBoolean(data: Record<string, unknown>, paths: string[][]): boolean 
   return undefined;
 }
 
+function pickNumberRecord(data: Record<string, unknown>, paths: string[][]): Record<string, number> | undefined {
+  for (const path of paths) {
+    let cur: unknown = data;
+    for (const key of path) {
+      if (cur && typeof cur === "object" && !Array.isArray(cur)) cur = (cur as Record<string, unknown>)[key];
+      else {
+        cur = undefined;
+        break;
+      }
+    }
+    if (!cur || typeof cur !== "object" || Array.isArray(cur)) continue;
+    const record: Record<string, number> = {};
+    for (const [key, value] of Object.entries(cur as Record<string, unknown>)) {
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) record[key] = value;
+    }
+    if (Object.keys(record).length) return record;
+  }
+  return undefined;
+}
+
 function pickStringArray(data: Record<string, unknown>, paths: string[][]): string[] | undefined {
   for (const path of paths) {
     let cur: unknown = data;
@@ -134,6 +154,16 @@ const LIGHTPANDA_COMMAND_PATHS: string[][] = [
   ["webRender", "lightpandaCommand"],
 ];
 
+const ENGINE_WEIGHTS_PATHS: string[][] = [
+  ["unslothWebTools", "engineWeights"],
+  ["webSearch", "engineWeights"],
+];
+
+const MAX_PER_HOST_PATHS: string[][] = [
+  ["unslothWebTools", "maxPerHost"],
+  ["webSearch", "maxPerHost"],
+];
+
 const ENGINE_PATHS: string[][] = [
   ["unslothWebTools", "engines"],
   ["webSearch", "engines"],
@@ -175,6 +205,19 @@ export async function loadDefaultEngines(cwd?: string): Promise<string[] | undef
     if (candidate !== undefined) result = candidate;
   }
   return result;
+}
+
+export async function loadDefaultEngineWeights(cwd?: string): Promise<Record<string, number> | undefined> {
+  let result: Record<string, number> | undefined;
+  for (const data of await settingsEntries(cwd)) {
+    const candidate = pickNumberRecord(data, ENGINE_WEIGHTS_PATHS);
+    if (candidate !== undefined) result = candidate;
+  }
+  return result;
+}
+
+export async function loadDefaultMaxPerHost(cwd?: string): Promise<number | undefined> {
+  return loadFetchSetting(cwd, MAX_PER_HOST_PATHS, (n) => n >= 0);
 }
 
 async function loadFetchSetting(cwd: string | undefined, paths: string[][], valid: (n: number) => boolean): Promise<number | undefined> {

@@ -53,6 +53,8 @@ export interface WebSearchOptions {
   cwd?: string;
   transport?: FetchTransport;
   engines?: string[];
+  engineWeights?: Record<string, number>;
+  maxPerHost?: number;
 }
 
 export { loadDefaultMaxResults };
@@ -84,6 +86,8 @@ export async function webSearch(
       transport: options.transport,
       policy,
       engines: options.engines,
+      engineWeights: options.engineWeights,
+      maxPerHost: options.maxPerHost,
     });
     if (signal?.aborted) return "Search cancelled.";
     if (!results.length) return EMPTY_SEARCH_RESULTS[0];
