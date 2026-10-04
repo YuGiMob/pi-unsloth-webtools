@@ -24,7 +24,7 @@ const WEIGHT_VECTORS: { name: string; weights: Record<string, number> }[] = [
   { name: "yandex-heavy", weights: { yandex: 2, startpage: 1.5, duckduckgo: 1.5 } },
 ];
 
-const PER_HOST_CHOICES = [1, 2, 3, 4, 5];
+const PER_HOST_CHOICES = [0, 1, 2, 4, 5];
 
 const args = process.argv.slice(2);
 const numberFlag = (name: string, fallback: number): number => {

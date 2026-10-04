@@ -243,12 +243,13 @@ third-party rendering service.
   being forced to the top. The remaining three engines can be narrowed further per machine with
   `webSearch.engines` (see Configuration).
 - Ranking: Studio's `SimpleFilterRanker` (keyword buckets with `wikipedia.org` pinned first) is
-  replaced by weighted reciprocal-rank fusion over each engine's own ordering, capped per
-  registrable domain. On the `npm run engine:eval` query set that lifts mean precision@5 from 0.28
-  (keyword buckets) to 0.35 (uncapped, and 0.32 at the default cap) — the fusion keeps the ranking
-  signal the engines already computed instead of guessing from query substrings. Weights default to
-  uniform because the three engines overlap so little (mean Jaccard 0.07–0.22) that weighting mostly
-  decides which engine dominates the list rather than which result is better.
+  replaced by weighted reciprocal-rank fusion over each engine's own ordering. On the
+  `npm run engine:eval` query set that lifts mean precision@5 from 0.28 (keyword buckets) to 0.35 —
+  the fusion keeps the ranking signal the engines already computed instead of guessing from query
+  substrings. Weights default to uniform because the three engines overlap so little (mean Jaccard
+  0.07–0.22) that weighting mostly decides which engine dominates the list rather than which result
+  is better. A per-domain cap exists (`webSearch.maxPerHost`) but is off by default: it measurably
+  costs precision, and the uncapped fused top-5 already spans 4.3 of 5 distinct domains.
 - Empty sweeps: ddgs 9.14.4 raises the last engine exception; this port reports a
   timeout whenever any engine timed out, so the timeout message is not masked by later
   generic engine failures. The timeout budget bounds the entire sweep: per-engine
@@ -340,7 +341,7 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `webFetch.transport` / `unslothWebTools.transport` | `tls-first` | Transport order for `web_fetch` and `web_search` engine requests: `tls-first` (default), `direct-first`, or `off` to disable the browser-fingerprint transport entirely |
 | `webSearch.engines` / `unslothWebTools.engines` | all three (duckduckgo, yandex, startpage) | Restrict `web_search` to a subset of engine names, e.g. `["duckduckgo", "yandex"]`; unknown names are ignored, and a list that matches nothing falls back to every engine |
 | `webSearch.engineWeights` / `unslothWebTools.engineWeights` | all `1` | Per-engine fusion weight, e.g. `{"startpage": 2, "yandex": 0.5}`; only positive numbers are read |
-| `webSearch.maxPerHost` / `unslothWebTools.maxPerHost` | `4` | Most results one registrable domain may contribute; `0` disables the cap |
+| `webSearch.maxPerHost` / `unslothWebTools.maxPerHost` | `0` (no cap) | Most results one registrable domain may contribute; `0` disables the cap |
 | `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering |
 | `webRender.lightpandaPath` / `unslothWebTools.lightpandaPath` | launcher installed by `scripts/install-lightpanda.sh`, else `lightpanda` on `PATH` | Path to the Lightpanda binary used for local rendering |
 | `webRender.lightpandaCommand` / `unslothWebTools.lightpandaCommand` | none | Command prefix that launches the renderer, for WSL (`["wsl.exe","-e","<path>"]`) or containers; overrides `lightpandaPath`. The fetch flags are appended to it |
@@ -399,8 +400,8 @@ RSS, per-fetch latency with the browser already running, and whether a persisten
 
 `npm run engine:eval` measures each search engine against a small hand-labelled developer query
 set: yield, latency and failures, pairwise URL overlap, unique contribution, and offline fusion
-simulations with candidate weight vectors. `--cache=FILE` reuses a previous run without touching
-the network; `--delay`, `--timeout`, `--max` and `--transport` tune the sweep.
+simulations with candidate weight vectors and per-host caps. `--cache=FILE` reuses a previous run
+without touching the network; `--delay`, `--timeout`, `--max` and `--transport` tune the sweep.
 
 ## Tests
 

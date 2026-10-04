@@ -567,6 +567,20 @@ describe("engine selection", () => {
     expect(results.every((result) => new URL(result.href).hostname === "one.example")).toBe(true);
   });
 
+  it("does not cap hosts by default", async () => {
+    const sameHost = Array.from(
+      { length: 5 },
+      (_, i) =>
+        `<div class="result"><div class="body"><h2><a href="https://one.example/p${i}">R${i}</a></h2><a href="https://one.example/p${i}">S${i}</a></div></div>`,
+    ).join("");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(sameHost, { status: 200 })),
+    );
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, { engines: ["duckduckgo"] });
+    expect(results.length).toBe(5);
+  });
+
   it("orders results by engine weight", async () => {
     const ddgHtml =
       '<div class="result"><div class="body"><h2><a href="https://ddg.example/a">D</a></h2><a href="https://ddg.example/a">snippet</a></div></div>';

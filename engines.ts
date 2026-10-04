@@ -823,7 +823,7 @@ export class ResultsAggregator {
 }
 
 const RRF_RANK_CONSTANT = 60;
-const DEFAULT_MAX_PER_HOST = 4;
+const DEFAULT_MAX_PER_HOST = 0;
 const MULTI_PART_SUFFIXES = new Set(["co.uk", "org.uk", "com.au", "co.jp", "co.nz", "com.br", "co.in"]);
 
 export function registrableDomain(url: string): string {
