@@ -1,4 +1,7 @@
 import { spawn as spawnProcess } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { visibleChars } from "./html-to-md.ts";
 import {
   checkUrlAccess,
@@ -201,11 +204,31 @@ function withProvenance(prefixed: string, url: string): string {
   return [...lines.slice(0, index), ...header, ...lines.slice(index)].join("\n");
 }
 
+function installedLauncher(): string | null {
+  let dataHome = process.env.XDG_DATA_HOME?.trim();
+  if (!dataHome) {
+    try {
+      const home = homedir();
+      if (!home) return null;
+      dataHome = join(home, ".local", "share");
+    } catch {
+      return null;
+    }
+  }
+  const dir = join(dataHome, "pi-unsloth-webtools", "lightpanda");
+  for (const name of ["lightpanda-run", "lightpanda"]) {
+    const candidate = join(dir, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 export function lightpandaBinary(options: LightpandaRenderOptions = {}): string {
   return (
     options.binaryPath ??
     options.settings?.binaryPath ??
     process.env.PI_LIGHTPANDA_BIN?.trim() ??
+    installedLauncher() ??
     DEFAULT_BINARY
   );
 }

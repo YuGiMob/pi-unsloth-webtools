@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -262,6 +262,31 @@ describe("lightpandaBinary", () => {
     expect(lightpandaBinary({})).toBe("/env/lightpanda");
     delete process.env.PI_LIGHTPANDA_BIN;
     expect(lightpandaBinary({})).toBe("lightpanda");
+  });
+  it("falls back to the launcher installed by the setup script", async () => {
+    const previousDataHome = process.env.XDG_DATA_HOME;
+    const root = await mkdtemp(join(tmpdir(), "pi-lightpanda-install-"));
+    const installDir = join(root, "pi-unsloth-webtools", "lightpanda");
+    await mkdir(installDir, { recursive: true });
+    process.env.XDG_DATA_HOME = root;
+    delete process.env.PI_LIGHTPANDA_BIN;
+    try {
+      await writeFile(join(installDir, "lightpanda"), "#!/bin/sh\nexit 0\n");
+      expect(lightpandaBinary({})).toBe(join(installDir, "lightpanda"));
+      await writeFile(join(installDir, "lightpanda-run"), "#!/bin/sh\nexit 0\n");
+      expect(lightpandaBinary({})).toBe(join(installDir, "lightpanda-run"));
+      process.env.PI_LIGHTPANDA_BIN = "/env/lightpanda";
+      expect(lightpandaBinary({})).toBe("/env/lightpanda");
+      delete process.env.PI_LIGHTPANDA_BIN;
+      expect(lightpandaBinary({ binaryPath: "/explicit/lightpanda" })).toBe("/explicit/lightpanda");
+      expect(
+        lightpandaBinary({ settings: { enabled: true, binaryPath: "/settings/lightpanda", command: null } }),
+      ).toBe("/settings/lightpanda");
+    } finally {
+      if (previousDataHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = previousDataHome;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

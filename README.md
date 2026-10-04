@@ -172,9 +172,10 @@ third-party rendering service.
   still gets its chance.
 - Lightpanda identifies itself honestly and refuses to impersonate a browser user agent, so hard
   anti-bot walls are returned as failures (the direct error, or the incomplete-content note).
-- Binary resolution: `webRender.lightpandaPath`, then `PI_LIGHTPANDA_BIN`, then
-  `lightpanda` on `PATH`. Prebuilt binaries exist for Linux (glibc; musl needs a source
-  build) and macOS, plus Docker images; Windows needs WSL2.
+- Binary resolution: `webRender.lightpandaPath`, then `PI_LIGHTPANDA_BIN`, then the launcher
+  installed by `scripts/install-lightpanda.sh`, then `lightpanda` on `PATH`. Prebuilt binaries
+  exist for Linux (glibc; musl needs a source build) and macOS, plus Docker images; Windows
+  needs WSL2.
 - Version matters: 1.0.0 renders JavaScript-heavy pages that the 0.2.x line cannot — measured on
   the same machine, IMDb went from a 76-byte empty document to 21k characters, dribbble from 32
   characters to 18k, and a Medium article from a challenge page to real text. Linux builds from
@@ -311,7 +312,7 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
 | `webFetch.transport` / `unslothWebTools.transport` | `tls-first` | Fetch transport order: `tls-first` (default), `direct-first`, or `off` to disable the browser-fingerprint transport entirely |
 | `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering |
-| `webRender.lightpandaPath` / `unslothWebTools.lightpandaPath` | `lightpanda` on `PATH` (`PI_LIGHTPANDA_BIN` fallback) | Path to the Lightpanda binary used for local rendering |
+| `webRender.lightpandaPath` / `unslothWebTools.lightpandaPath` | launcher installed by `scripts/install-lightpanda.sh`, else `lightpanda` on `PATH` | Path to the Lightpanda binary used for local rendering |
 | `webRender.lightpandaCommand` / `unslothWebTools.lightpandaCommand` | none | Command prefix that launches the renderer, for WSL (`["wsl.exe","-e","<path>"]`) or containers; overrides `lightpandaPath`. The fetch flags are appended to it |
 
 Environment overrides: `PI_UNSLOTH_CACHE_DIR` changes the fetch cache directory, `PI_UNSLOTH_WEBTOOLS_STATS` opts into append-only sweep stats JSONL, `PI_CODING_AGENT_DIR` / `PI_AGENT_DIR` change the global settings directory, and `PI_LIGHTPANDA_BIN` points at the local renderer binary. Cache entries live 1 hour and stale copies are served only after a network failure. SOCKS5 proxies named by `HTTPS_PROXY`, `HTTP_PROXY`, or `ALL_PROXY` are honored on every fetch (`NO_PROXY` exclusions apply).
