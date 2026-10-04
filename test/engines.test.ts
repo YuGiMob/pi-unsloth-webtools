@@ -4,6 +4,7 @@ import {
   ResultsAggregator,
   SearchCancelled,
   SearchTimeoutError,
+  TEXT_ENGINES,
   autoTextSearch,
   canonicalizeHref,
   extractResults,
@@ -101,6 +102,16 @@ describe("xpath subset", () => {
     expect(items.length).toBe(2);
     const hrefs = xpathText(".//a[div[contains(@class, 'title')]]/@href", items[0]);
     expect(hrefs).toEqual([""]);
+  });
+
+  it("supports direct-child predicates", () => {
+    const dom = buildDom(
+      '<div class="result"><a href="/one"><h2>One</h2></a><p>First</p></div><div class="result"><p>No link</p></div>',
+    );
+    const items = xpathNodes("//div[contains(@class, 'result')][./a]", dom);
+    expect(items.length).toBe(1);
+    expect(xpathText("./a/@href", items[0])).toEqual(["/one"]);
+    expect(xpathText(".//h2//text()", items[0]).join("")).toBe("One");
   });
 });
 
@@ -321,6 +332,43 @@ describe("wikipedia engine", () => {
   });
 });
 
+describe("startpage engine", () => {
+  const STARTPAGE_HTML = `
+    <div class="result css-1">
+      <a href="https://example.com/one" class="result-title result-link"><h2>First result</h2></a>
+      <p>First snippet.</p>
+    </div>
+    <div class="result css-2">
+      <a href="https://example.com/two" class="result-title result-link"><h2>Second result</h2></a>
+      <p>Second snippet.</p>
+    </div>
+    <div class="result css-3"><p>No link here</p></div>
+  `;
+
+  it("extracts organic results and scopes the request to the region", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(String(url));
+        return new Response(STARTPAGE_HTML, { status: 200 });
+      }),
+    );
+    const startpage = TEXT_ENGINES.find((engine) => engine.name === "startpage");
+    expect(startpage?.provider).toBe("google");
+    const results = await startpage!.search("unsloth studio", { region: "de-de", safesearch: "moderate" }, 10_000);
+    expect(results).toEqual([
+      { title: "First result", href: "https://example.com/one", body: "First snippet." },
+      { title: "Second result", href: "https://example.com/two", body: "Second snippet." },
+    ]);
+    const requested = new URL(calls[0]);
+    expect(requested.origin + requested.pathname).toBe("https://www.startpage.com/sp/search");
+    expect(requested.searchParams.get("query")).toBe("unsloth studio");
+    expect(requested.searchParams.get("qsr")).toBe("de_DE");
+    expect(requested.searchParams.has("qadf")).toBe(false);
+  });
+});
+
 describe("sweep deadline", () => {
   it("stops dispatching engines once the sweep budget is exhausted", async () => {
     let calls = 0;
@@ -425,7 +473,7 @@ describe("engine retry", () => {
       }),
     );
     await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(SearchTimeoutError);
-    expect(calls).toBe(7);
+    expect(calls).toBe(6);
   });
 
   it("does not classify a retry that cannot start as a timeout", async () => {
@@ -449,7 +497,7 @@ describe("engine retry", () => {
       }),
     );
     await expect(autoTextSearch("cat", 5, 400)).rejects.toThrow(EmptySweepError);
-    expect(calls).toBe(7);
+    expect(calls).toBe(6);
   });
 });
 
@@ -473,5 +521,35 @@ describe("engine request headers", () => {
       "Content-Type": "application/x-www-form-urlencoded",
     });
     expect(results.length).toBe(5);
+  });
+});
+
+describe("engine selection", () => {
+  it("limits the sweep to the configured engines", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(String(url));
+        return new Response(ddgResultsHtml(5), { status: 200 });
+      }),
+    );
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, { engines: ["duckduckgo"] });
+    expect(results.length).toBe(5);
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toContain("html.duckduckgo.com");
+  });
+
+  it("falls back to every engine when no configured name matches", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(String(url));
+        return new Response("", { status: 200 });
+      }),
+    );
+    await expect(autoTextSearch("cat", 5, 10_000, undefined, { engines: ["nope"] })).rejects.toThrow(EmptySweepError);
+    expect(calls.length).toBeGreaterThan(1);
   });
 });

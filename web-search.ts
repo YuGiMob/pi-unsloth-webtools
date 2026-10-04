@@ -52,6 +52,7 @@ export interface WebSearchOptions {
   client?: SearchClient;
   cwd?: string;
   transport?: FetchTransport;
+  engines?: string[];
 }
 
 export { loadDefaultMaxResults };
@@ -79,7 +80,11 @@ export async function webSearch(
         (policy?.blockedDomains?.length ?? 0) > 0,
     );
     const wanted = restricted ? maxResults * POLICY_OVERFETCH : maxResults;
-    const results = await client(effectiveQuery, wanted, signal, timeoutMs, { transport: options.transport, policy });
+    const results = await client(effectiveQuery, wanted, signal, timeoutMs, {
+      transport: options.transport,
+      policy,
+      engines: options.engines,
+    });
     if (signal?.aborted) return "Search cancelled.";
     if (!results.length) return EMPTY_SEARCH_RESULTS[0];
     const allowed: SearchResult[] = [];

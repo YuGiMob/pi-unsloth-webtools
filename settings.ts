@@ -133,6 +133,11 @@ const LIGHTPANDA_COMMAND_PATHS: string[][] = [
   ["unslothWebTools", "lightpandaCommand"],
   ["webRender", "lightpandaCommand"],
 ];
+
+const ENGINE_PATHS: string[][] = [
+  ["unslothWebTools", "engines"],
+  ["webSearch", "engines"],
+];
 function clampMaxResults(value: number): number {
   return Math.min(20, Math.max(1, value));
 }
@@ -159,6 +164,15 @@ export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
   for (const data of await settingsEntries(cwd)) {
     const candidate = pickNumber(data, MAX_RESULTS_PATHS);
     if (candidate !== undefined) result = clampMaxResults(candidate);
+  }
+  return result;
+}
+
+export async function loadDefaultEngines(cwd?: string): Promise<string[] | undefined> {
+  let result: string[] | undefined;
+  for (const data of await settingsEntries(cwd)) {
+    const candidate = pickStringArray(data, ENGINE_PATHS);
+    if (candidate !== undefined) result = candidate;
   }
   return result;
 }

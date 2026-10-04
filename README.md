@@ -38,8 +38,9 @@ Both tools display their target in the TUI tool row: `web_search "query"` and `w
 
 Mirrors Unsloth Studio's `web_search` tool:
 
-- Searches exactly like Studio's pinned `ddgs==9.14.4` `DDGS.text()`: the same seven engines
-  (duckduckgo, brave, google, mojeek, yahoo, yandex, wikipedia; bing is disabled upstream),
+- Searches like Studio's pinned `ddgs==9.14.4` `DDGS.text()`: the Studio engines a non-JavaScript
+  client can still reach (duckduckgo, brave, google, yandex, wikipedia; bing is disabled upstream)
+  plus startpage (see [Known differences from Studio](#known-differences-from-studio)),
   the same provider deduplication, href-dedupe aggregator with frequency ordering (hrefs are
   canonicalized first — `utm_*`/tracking parameters and fragments are dropped and the URL is
   re-serialized, collapsing host-case, default-port, and trailing-slash variants — so the
@@ -227,6 +228,15 @@ third-party rendering service.
   transport `web_fetch` uses), so engine fingerprints match Chrome rather than Node's `fetch`;
   the plain Node transport is the fallback. User agents on that fallback are a fixed browser set
   plus ddgs's Android Google UA generator, not `fake_useragent`'s database.
+- Startpage: an extra engine beyond Studio's set, matching newer ddgs (its Google-backed index
+  means it shares the `google` provider slot). It answers a plain `GET /sp/search?query=` and
+  serves an Anubis proof-of-work challenge to clients that do not look like a browser, so it works
+  through the browser-fingerprint transport and the fallback's browser headers, but not a bare
+  Node `fetch`. Startpage's POST endpoint and its safesearch parameter are challenge-gated and are
+  not used.
+- Dropped engines: mojeek and yahoo are not used, because a non-JavaScript client cannot get past
+  them (mojeek answers with a JavaScript challenge, yahoo loops through its `_bv` bot beacon).
+  Remaining engines can be disabled per machine with `webSearch.engines` (see Configuration).
 - Empty sweeps: ddgs 9.14.4 raises the last engine exception; this port reports a
   timeout whenever any engine timed out, so the timeout message is not masked by later
   generic engine failures. The timeout budget bounds the entire sweep: per-engine
@@ -243,7 +253,7 @@ third-party rendering service.
   the document `<title>`. Studio keys on raw hrefs and returns the converted body alone.
 - Upstream drift: current ddgs ships ten backends (adding bing, startpage, grokipedia),
   requires a `vqd` token for DuckDuckGo, and exposes an `extract()` mode. This port
-  deliberately pins the Studio snapshot — seven engines, bing disabled upstream, no vqd,
+  deliberately pins the Studio snapshot plus startpage — bing stays disabled, no vqd,
   no pagination — so engine behavior matches Studio rather than ddgs head.
 
 ## When to use alternatives
@@ -316,6 +326,7 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `unslothWebTools.allowPrivateAddresses` / `webFetch.allowPrivateAddresses` | `true` | Opt out to restore the resolved-IP SSRF guard: private/loopback/link-local hosts (localhost, LAN IPs) are refused again. Non-canonical numeric IP encodings stay blocked either way |
 | `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
 | `webFetch.transport` / `unslothWebTools.transport` | `tls-first` | Transport order for `web_fetch` and `web_search` engine requests: `tls-first` (default), `direct-first`, or `off` to disable the browser-fingerprint transport entirely |
+| `webSearch.engines` / `unslothWebTools.engines` | all engines | Restrict `web_search` to a subset of engine names, e.g. `["duckduckgo", "startpage", "yandex", "wikipedia"]`; unknown names are ignored, and a list that matches nothing falls back to every engine |
 | `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering |
 | `webRender.lightpandaPath` / `unslothWebTools.lightpandaPath` | launcher installed by `scripts/install-lightpanda.sh`, else `lightpanda` on `PATH` | Path to the Lightpanda binary used for local rendering |
 | `webRender.lightpandaCommand` / `unslothWebTools.lightpandaCommand` | none | Command prefix that launches the renderer, for WSL (`["wsl.exe","-e","<path>"]`) or containers; overrides `lightpandaPath`. The fetch flags are appended to it |

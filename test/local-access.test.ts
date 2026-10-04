@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchPageText, fetchUrlRaw } from "../web-fetch.ts";
-import { loadDefaultFetchSettings, loadLightpandaSettings } from "../settings.ts";
+import { loadDefaultEngines, loadDefaultFetchSettings, loadLightpandaSettings } from "../settings.ts";
 import { makePdf } from "./helpers.ts";
 
 const { dnsLookupMock } = vi.hoisted(() => ({ dnsLookupMock: vi.fn() }));
@@ -340,5 +340,31 @@ describe("lightpanda command settings", () => {
     await withSettings("wsl.exe -e /home/u/lp", async () => {
       expect((await loadLightpandaSettings()).command).toBeNull();
     });
+  });
+});
+
+describe("search engine settings", () => {
+  const previousEnv = process.env.PI_CODING_AGENT_DIR;
+
+  afterEach(async () => {
+    if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousEnv;
+  });
+
+  it("defaults to every engine and reads a project override", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-unsloth-engines-"));
+    try {
+      process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+      expect(await loadDefaultEngines()).toBeUndefined();
+      const cwd = join(root, "project");
+      await mkdir(join(cwd, ".pi"), { recursive: true });
+      await writeFile(
+        join(cwd, ".pi", "settings.json"),
+        JSON.stringify({ webSearch: { engines: ["duckduckgo", "startpage"] } }),
+      );
+      expect(await loadDefaultEngines(cwd)).toEqual(["duckduckgo", "startpage"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

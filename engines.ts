@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { appendFile, chmod, mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { collapseWhitespace, decodeHtmlEntities, feedHtml } from "./html-to-md.ts";
@@ -249,6 +248,13 @@ function parsePredExpr(input: string): Pred {
       const name = word();
       return { op: "desc", tag: name };
     }
+    if (input.startsWith("./", pos)) {
+      pos += 2;
+      const name = word();
+      const { preds, next } = parsePredicateBlocks(input, pos);
+      pos = next;
+      return { op: "child", tag: name, preds };
+    }
     const name = word();
     const { preds, next } = parsePredicateBlocks(input, pos);
     pos = next;
@@ -490,30 +496,13 @@ function googleUserAgent(): string {
   );
 }
 
-function tokenUrlSafe(byteLength: number): string {
-  return randomBytes(byteLength).toString("base64url");
-}
-
-function unquotePlus(value: string): string {
-  try {
-    return decodeURIComponent(value.replace(/\+/g, "%20"));
-  } catch {
-    return value.replace(/\+/g, " ");
-  }
-}
-
-function yahooExtractUrl(raw: string): string {
-  const afterRu = raw.split("/RU=", 2)[1] ?? "";
-  const t = afterRu.split("/RK=", 1)[0].split("/RS=", 1)[0];
-  return unquotePlus(t);
-}
-
 export type EngineImpersonation = (options: TlsHopOptions) => Promise<TlsHopResponse | null>;
 
 export interface SearchEngineOptions {
   transport?: FetchTransport;
   policy?: WebsitePolicy | null;
   impersonate?: EngineImpersonation;
+  engines?: string[];
 }
 
 export interface EngineContext extends SearchEngineOptions {
@@ -835,53 +824,6 @@ const GOOGLE: Engine = {
   },
 };
 
-const MOJEEK: Engine = {
-  name: "mojeek",
-  provider: "mojeek",
-  async search(query, ctx, timeoutMs, signal) {
-    const [country, lang] = ctx.region.toLowerCase().split("-");
-    const params: Record<string, string> = { q: query };
-    if (ctx.safesearch === "on") params["safe"] = "1";
-    const html = await httpGet(
-      "https://www.mojeek.com/search",
-      params,
-      { cookies: { arc: country, lb: lang }, timeoutMs, signal, ctx },
-    );
-    if (!html) return null;
-    return extractResults(html, "//ul[contains(@class, 'results')]/li", {
-      title: ".//h2//text()",
-      href: ".//h2/a/@href",
-      body: ".//p[@class='s']//text()",
-    });
-  },
-};
-
-const YAHOO: Engine = {
-  name: "yahoo",
-  provider: "bing",
-  async search(query, ctx, timeoutMs, signal) {
-    const ylt = tokenUrlSafe(18);
-    const ylu = tokenUrlSafe(35);
-    const html = await httpGet(
-      `https://search.yahoo.com/search;_ylt=${ylt};_ylu=${ylu}`,
-      { p: query },
-      { timeoutMs, signal, ctx },
-    );
-    if (!html) return null;
-    const results = extractResults(html, "//div[contains(@class, 'relsrch')]", {
-      title: ".//div[contains(@class, 'Title')]//h3//text()",
-      href: ".//div[contains(@class, 'Title')]//a/@href",
-      body: ".//div[contains(@class, 'Text')]//text()",
-    });
-    return results
-      .filter((r) => !r.href.startsWith("https://www.bing.com/aclick?"))
-      .map((r) => {
-        if (r.href.includes("/RU=")) r.href = yahooExtractUrl(r.href);
-        return r;
-      });
-  },
-};
-
 const YANDEX: Engine = {
   name: "yandex",
   provider: "yandex",
@@ -944,7 +886,26 @@ const WIKIPEDIA: Engine = {
   },
 };
 
-export const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, BRAVE, GOOGLE, MOJEEK, YAHOO, YANDEX, WIKIPEDIA];
+const START_PAGE: Engine = {
+  name: "startpage",
+  provider: "google",
+  async search(query, ctx, timeoutMs, signal) {
+    const [country, lang] = ctx.region.toLowerCase().split("-");
+    const html = await httpGet(
+      "https://www.startpage.com/sp/search",
+      { query, qsr: `${lang}_${country.toUpperCase()}` },
+      { headers: { Referer: "https://www.startpage.com/" }, timeoutMs, signal, ctx },
+    );
+    if (!html) return null;
+    return extractResults(html, "//div[contains(@class, 'result')][./a]", {
+      title: ".//h2//text()",
+      href: "./a/@href",
+      body: ".//p//text()",
+    });
+  },
+};
+
+export const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, BRAVE, GOOGLE, YANDEX, WIKIPEDIA, START_PAGE];
 
 export class ResultsAggregator {
   private cache = new Map<string, SearchResult>();
@@ -1045,8 +1006,15 @@ async function recordSweepStats(query: string, maxResults: number, started: numb
   } catch {}
 }
 
-function shuffledEngines(): Engine[] {
-  const shuffled = [...TEXT_ENGINES];
+function selectedEngines(names: string[] | undefined): Engine[] {
+  if (!names?.length) return TEXT_ENGINES;
+  const wanted = new Set(names.map((name) => name.trim().toLowerCase()));
+  const chosen = TEXT_ENGINES.filter((engine) => wanted.has(engine.name));
+  return chosen.length ? chosen : TEXT_ENGINES;
+}
+
+function shuffledEngines(engines: Engine[] = TEXT_ENGINES): Engine[] {
+  const shuffled = [...engines];
   for (let i = shuffled.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
@@ -1064,7 +1032,7 @@ export async function autoTextSearch(
   options: SearchEngineOptions = {},
 ): Promise<SearchResult[]> {
   const started = Date.now();
-  const engines = shuffledEngines();
+  const engines = shuffledEngines(selectedEngines(options.engines));
   const deadline = started + timeoutMs;
   const seenProviders = new Set<string>();
   const aggregator = new ResultsAggregator();
