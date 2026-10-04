@@ -56,10 +56,11 @@ Mirrors Unsloth Studio's `web_search` tool:
 - Sweeps stop as soon as enough results are gathered: engines still in flight are aborted
   instead of being allowed to run to their timeout.
 - Engine requests go through the browser-fingerprint transport first (`webFetch.transport`,
-  default `tls-first`) and fall back to the plain Node transport; a refusal on one transport is
-  retried on the other. Redirects are followed manually, so every hop is re-checked against the
-  website policy and private-address literals are refused. When a SOCKS5 proxy is configured the
-  sweep stays on the plain transport, keeping agent and Tor routing intact.
+  default `tls-first`) and fall back to the plain Node transport; a refusal or bot-challenge
+  response (such as DuckDuckGo's 202) on one transport is retried on the other. Redirects are
+  followed manually, so every hop is re-checked against the website policy and private-address
+  literals are refused. When a SOCKS5 proxy is configured the sweep stays on the plain
+  transport, keeping agent and Tor routing intact.
 
 ### web_fetch
 

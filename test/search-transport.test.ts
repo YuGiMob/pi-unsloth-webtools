@@ -129,6 +129,41 @@ describe("engine transport selection", () => {
     expect(calls.some((call) => call.url.toString() === DDG_URL)).toBe(true);
   });
 
+  it("retries a challenged impersonated response through the plain transport", async () => {
+    const { impersonate } = impersonationStub(() => tlsResponse("challenge", 202));
+    const direct = directStub(emptyResult);
+    vi.stubGlobal("fetch", direct.run);
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, {
+      transport: "tls-first",
+      impersonate,
+    });
+    expect(results.length).toBe(5);
+    expect(direct.calls).toContain(DDG_URL);
+  });
+
+  it("retries a challenged direct response through the impersonated transport", async () => {
+    const { calls, impersonate } = impersonationStub((options) =>
+      tlsResponse(options.url.toString() === DDG_URL ? ddgPage(5) : EMPTY_PAGE),
+    );
+    const direct = directStub(() => new Response("challenge", { status: 202 }));
+    vi.stubGlobal("fetch", direct.run);
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, {
+      transport: "direct-first",
+      impersonate,
+    });
+    expect(results.length).toBe(5);
+    expect(calls.some((call) => call.url.toString() === DDG_URL)).toBe(true);
+  });
+
+  it("reports an empty sweep when every transport is challenged", async () => {
+    const { impersonate } = impersonationStub(() => tlsResponse("challenge", 202));
+    const direct = directStub(() => new Response("challenge", { status: 202 }));
+    vi.stubGlobal("fetch", direct.run);
+    await expect(
+      autoTextSearch("cat", 5, 10_000, undefined, { transport: "tls-first", impersonate }),
+    ).rejects.toThrow(EmptySweepError);
+  });
+
   it("falls back to the plain transport for a truncated impersonated body", async () => {
     const { impersonate } = impersonationStub((options) =>
       options.url.toString() === DDG_URL

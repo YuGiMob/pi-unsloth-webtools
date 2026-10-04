@@ -690,8 +690,11 @@ async function httpFetch(
           attempt = await directEngineHop(targetUrl, headers, method, body, hopSignal);
         }
         if (attempt === null) continue;
-        if (response === null || (attempt.status < 400 && response.status >= 400)) response = attempt;
-        if (attempt.status < 400) break;
+        if (attempt.status === 200 || (attempt.status >= 300 && attempt.status < 400)) {
+          response = attempt;
+          break;
+        }
+        if (response === null || response.status >= 400) response = attempt;
       } catch (err) {
         const mapped = classifyRequestError(err, caller, hopSignal);
         if (mapped) throw mapped;
