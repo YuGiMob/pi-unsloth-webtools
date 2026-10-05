@@ -239,18 +239,24 @@ export function lightpandaLaunch(options: LightpandaRenderOptions = {}): string[
   return [lightpandaBinary(options)];
 }
 
-export async function renderPageWithLightpanda(
+type LightpandaDumpOutcome =
+  | { ok: true; raw: string; truncated: boolean; normalized: string }
+  | { ok: false; message: string }
+  | null;
+
+async function fetchLightpandaDump(
   url: string,
-  options: LightpandaRenderOptions = {},
-): Promise<string | null> {
+  options: LightpandaRenderOptions,
+  dump: LightpandaDump,
+): Promise<LightpandaDumpOutcome> {
   if (options.settings && options.settings.enabled === false) return null;
   const target = typeof url === "string" ? url.trim() : "";
   const policy = options.websitePolicy ?? null;
-  if (!target) return checkUrlAccess("", policy)[1];
-  if (parseLocalPath(target) !== null) return LOCAL_FILE_MESSAGE;
+  if (!target) return { ok: false, message: checkUrlAccess("", policy)[1] };
+  if (parseLocalPath(target) !== null) return { ok: false, message: LOCAL_FILE_MESSAGE };
   const normalized = normalizeUrlScheme(target);
   const [allowed, reason, hostname] = checkUrlAccess(normalized, policy);
-  if (!allowed) return reason;
+  if (!allowed) return { ok: false, message: reason };
   const launch = lightpandaLaunch(options);
   const spawn = options.spawn ?? (spawnProcess as unknown as LightpandaSpawn);
   if (!(await binaryAvailable(launch, spawn))) return null;
@@ -262,12 +268,14 @@ export async function renderPageWithLightpanda(
   const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
   const resolve = options.resolve ?? resolveAndValidateHost;
   const resolved = await resolve(hostname, signal, false);
-  if (options.signal?.aborted) return CANCELLED_MESSAGE;
-  if (timeoutSignal.aborted) return TIMED_OUT_MESSAGE;
+  if (options.signal?.aborted) return { ok: false, message: CANCELLED_MESSAGE };
+  if (timeoutSignal.aborted) return { ok: false, message: TIMED_OUT_MESSAGE };
   if (!resolved.ok) {
-    return resolved.reason.startsWith("Blocked:") ? resolved.reason : `Failed to render URL: ${resolved.reason}`;
+    return {
+      ok: false,
+      message: resolved.reason.startsWith("Blocked:") ? resolved.reason : `Failed to render URL: ${resolved.reason}`,
+    };
   }
-  const dump = options.dump ?? "html";
   const result = await runLightpanda(
     launch,
     [
@@ -284,16 +292,40 @@ export async function renderPageWithLightpanda(
     { timeoutMs, signal: options.signal, spawn },
   );
   if (result.missing) return null;
-  if (result.cancelled) return CANCELLED_MESSAGE;
-  if (result.timedOut) return TIMED_OUT_MESSAGE;
+  if (result.cancelled) return { ok: false, message: CANCELLED_MESSAGE };
+  if (result.timedOut) return { ok: false, message: TIMED_OUT_MESSAGE };
   if (result.code !== 0) {
-    return `Failed to render URL: Lightpanda exited with code ${result.code ?? "unknown"}.`;
+    return { ok: false, message: `Failed to render URL: Lightpanda exited with code ${result.code ?? "unknown"}.` };
   }
-  const raw = result.stdout;
+  return { ok: true, raw: result.stdout, truncated: result.truncated, normalized };
+}
+
+export async function renderPageWithLightpanda(
+  url: string,
+  options: LightpandaRenderOptions = {},
+): Promise<string | null> {
+  const dump = options.dump ?? "html";
+  const fetched = await fetchLightpandaDump(url, options, dump);
+  if (fetched === null) return null;
+  if (!fetched.ok) return fetched.message;
   const rendered =
-    dump === "html" ? pagePrefixedMarkdown(result.truncated ? raw + TRUNCATED_BODY_NOTICE : raw) : raw.trim();
+    dump === "html"
+      ? pagePrefixedMarkdown(fetched.truncated ? fetched.raw + TRUNCATED_BODY_NOTICE : fetched.raw)
+      : fetched.raw.trim();
   if (bodyChars(rendered) === 0) return NO_TEXT_MESSAGE;
   const withHeader =
-    dump === "html" || !result.truncated ? withProvenance(rendered, normalized) : withProvenance(rendered + TRUNCATED_BODY_NOTICE, normalized);
+    dump === "html" || !fetched.truncated
+      ? withProvenance(rendered, fetched.normalized)
+      : withProvenance(rendered + TRUNCATED_BODY_NOTICE, fetched.normalized);
   return truncatePageText(withHeader, options.maxChars);
+}
+
+export async function renderPageHtml(
+  url: string,
+  options: LightpandaRenderOptions = {},
+): Promise<string | null> {
+  const fetched = await fetchLightpandaDump(url, options, "html");
+  if (fetched === null || !fetched.ok) return null;
+  const html = fetched.raw.trim();
+  return html || null;
 }

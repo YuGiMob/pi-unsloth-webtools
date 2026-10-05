@@ -1,5 +1,5 @@
 import { checkUrlAccess, scopeSearchQuery, type WebsitePolicy } from "./web-access.ts";
-import { loadDefaultMaxResults } from "./settings.ts";
+import { loadDefaultMaxResults, loadLightpandaSettings } from "./settings.ts";
 import { collapseWhitespace } from "./html-to-md.ts";
 import {
   autoTextSearch,
@@ -7,8 +7,10 @@ import {
   SearchCancelled,
   SearchTimeoutError,
   type SearchEngineOptions,
+  type SearchRenderPage,
   type SearchResult,
 } from "./engines.ts";
+import { renderPageHtml } from "./lightpanda.ts";
 import type { FetchTransport } from "./tls-fetch.ts";
 
 export { EmptySweepError, SearchCancelled, SearchTimeoutError } from "./engines.ts";
@@ -44,6 +46,18 @@ export async function ddgSearch(
 
 const POLICY_OVERFETCH = 4;
 
+async function configuredRenderPage(cwd?: string): Promise<SearchRenderPage | undefined> {
+  const settings = await loadLightpandaSettings(cwd).catch(() => null);
+  if (!settings?.enabled) return undefined;
+  return (url, options) =>
+    renderPageHtml(url, {
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+      websitePolicy: options.websitePolicy,
+      settings,
+    });
+}
+
 export interface WebSearchOptions {
   maxResults?: number;
   timeoutMs?: number;
@@ -55,6 +69,8 @@ export interface WebSearchOptions {
   engines?: string[];
   engineWeights?: Record<string, number>;
   maxPerHost?: number;
+  lightpandaFallback?: boolean;
+  renderPage?: SearchRenderPage;
 }
 
 export { loadDefaultMaxResults };
@@ -82,12 +98,18 @@ export async function webSearch(
         (policy?.blockedDomains?.length ?? 0) > 0,
     );
     const wanted = restricted ? maxResults * POLICY_OVERFETCH : maxResults;
+    const renderFallback = options.lightpandaFallback === true;
+    const renderPage = renderFallback
+      ? options.renderPage ?? (await configuredRenderPage(options.cwd))
+      : undefined;
     const results = await client(effectiveQuery, wanted, signal, timeoutMs, {
       transport: options.transport,
       policy,
       engines: options.engines,
       engineWeights: options.engineWeights,
       maxPerHost: options.maxPerHost,
+      renderFallback,
+      renderPage,
     });
     if (signal?.aborted) return "Search cancelled.";
     if (!results.length) return EMPTY_SEARCH_RESULTS[0];

@@ -283,6 +283,17 @@ describe("search client options", () => {
     };
     const policy = { allowedDomains: ["arxiv.org"], blockedDomains: [] };
     await webSearch("q", { transport: "off", websitePolicy: policy, client });
-    expect(seen).toEqual([{ transport: "off", policy }]);
+    expect(seen).toEqual([{ transport: "off", policy, renderFallback: false }]);
+  });
+
+  it("forwards the render fallback seam when it is enabled", async () => {
+    const seen: unknown[] = [];
+    const client: SearchClient = async (_query, _maxResults, _signal, _timeoutMs, options) => {
+      seen.push(options);
+      return [];
+    };
+    const renderPage = async () => "<html></html>";
+    await webSearch("q", { lightpandaFallback: true, renderPage, client });
+    expect(seen).toEqual([expect.objectContaining({ renderFallback: true, renderPage })]);
   });
 });

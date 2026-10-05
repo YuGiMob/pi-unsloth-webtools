@@ -613,3 +613,100 @@ describe("engine selection", () => {
     expect(results.map((result) => result.href)).toEqual(["https://start.example/b", "https://ddg.example/a"]);
   });
 });
+
+describe("engine render fallback", () => {
+  it("renders the engine page when the network transports return nothing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("blocked", { status: 403 })),
+    );
+    const renderPage = vi.fn(async (_url: string, _options: { timeoutMs: number }) => ddgResultsHtml(3));
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, {
+      engines: ["duckduckgo"],
+      renderFallback: true,
+      renderPage,
+    });
+    expect(results.length).toBe(3);
+    expect(renderPage).toHaveBeenCalledTimes(1);
+    const [url, options] = renderPage.mock.calls[0];
+    expect(url).toContain("html.duckduckgo.com/html/");
+    expect(url).toContain("q=cat");
+    expect(options.timeoutMs).toBeGreaterThan(0);
+  });
+
+  it("renders when the engine answers with a challenge page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<html><body>challenge required</body></html>", { status: 200 })),
+    );
+    const renderPage = vi.fn(async () => ddgResultsHtml(4));
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, {
+      engines: ["duckduckgo"],
+      renderFallback: true,
+      renderPage,
+    });
+    expect(results.length).toBe(4);
+    expect(renderPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips rendering when results already arrived", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(ddgResultsHtml(5), { status: 200 })),
+    );
+    const renderPage = vi.fn(async () => ddgResultsHtml(1));
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, {
+      engines: ["duckduckgo"],
+      renderFallback: true,
+      renderPage,
+    });
+    expect(results.length).toBe(5);
+    expect(renderPage).not.toHaveBeenCalled();
+  });
+
+  it("does not render without the toggle", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("blocked", { status: 403 })),
+    );
+    const renderPage = vi.fn(async () => ddgResultsHtml(1));
+    await expect(
+      autoTextSearch("cat", 5, 10_000, undefined, { engines: ["duckduckgo"], renderPage }),
+    ).rejects.toThrow(EmptySweepError);
+    expect(renderPage).not.toHaveBeenCalled();
+  });
+
+  it("keeps the failure when the renderer yields nothing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("blocked", { status: 403 })),
+    );
+    const renderPage = vi.fn(async () => null);
+    await expect(
+      autoTextSearch("cat", 5, 10_000, undefined, {
+        engines: ["duckduckgo"],
+        renderFallback: true,
+        renderPage,
+      }),
+    ).rejects.toThrow(EmptySweepError);
+    expect(renderPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders each engine with its own request url", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("blocked", { status: 403 })),
+    );
+    const renderPage = vi.fn(async (_url: string, _options: { timeoutMs: number }) => "<html><body></body></html>");
+    await expect(
+      autoTextSearch("cat", 5, 10_000, undefined, {
+        engines: ["yandex", "startpage"],
+        renderFallback: true,
+        renderPage,
+      }),
+    ).rejects.toThrow(EmptySweepError);
+    const urls = renderPage.mock.calls.map(([url]) => String(url));
+    expect(urls.some((url) => url.includes("yandex.com/search/site/") && url.includes("text=cat"))).toBe(true);
+    expect(urls.some((url) => url.includes("startpage.com/sp/search") && url.includes("query=cat"))).toBe(true);
+  });
+});

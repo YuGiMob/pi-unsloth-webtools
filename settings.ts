@@ -168,6 +168,12 @@ const ENGINE_PATHS: string[][] = [
   ["unslothWebTools", "engines"],
   ["webSearch", "engines"],
 ];
+
+const LIGHTPANDA_FALLBACK_PATHS: string[][] = [
+  ["unslothWebTools", "lightpandaFallback"],
+  ["webSearch", "lightpandaFallback"],
+];
+
 function clampMaxResults(value: number): number {
   return Math.min(20, Math.max(1, value));
 }
@@ -198,26 +204,37 @@ export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
   return result;
 }
 
-export async function loadEngineSettings(cwd?: string): Promise<{
+export async function loadSearchSettings(cwd?: string): Promise<{
   engines: string[] | undefined;
+  lightpandaFallback: boolean | undefined;
   sourceFile: string | null;
 }> {
   let engines: string[] | undefined;
+  let lightpandaFallback: boolean | undefined;
   let sourceFile: string | null = null;
   for (const file of settingsFiles(cwd)) {
     const data = await readJson(file);
     if (!data) continue;
-    const candidate = pickStringArray(data, ENGINE_PATHS);
-    if (candidate !== undefined) {
-      engines = candidate;
+    const enginesCandidate = pickStringArray(data, ENGINE_PATHS);
+    if (enginesCandidate !== undefined) {
+      engines = enginesCandidate;
+      sourceFile = file;
+    }
+    const fallbackCandidate = pickBoolean(data, LIGHTPANDA_FALLBACK_PATHS);
+    if (fallbackCandidate !== undefined) {
+      lightpandaFallback = fallbackCandidate;
       sourceFile = file;
     }
   }
-  return { engines, sourceFile };
+  return { engines, lightpandaFallback, sourceFile };
 }
 
 export async function loadDefaultEngines(cwd?: string): Promise<string[] | undefined> {
-  return (await loadEngineSettings(cwd)).engines;
+  return (await loadSearchSettings(cwd)).engines;
+}
+
+export async function loadSearchLightpandaFallback(cwd?: string): Promise<boolean | undefined> {
+  return (await loadSearchSettings(cwd)).lightpandaFallback;
 }
 
 export async function loadDefaultEngineWeights(cwd?: string): Promise<Record<string, number> | undefined> {

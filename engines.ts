@@ -480,6 +480,10 @@ export function extractResults(
 }
 
 export type EngineImpersonation = (options: TlsHopOptions) => Promise<TlsHopResponse | null>;
+export type SearchRenderPage = (
+  url: string,
+  options: { timeoutMs: number; signal?: AbortSignal; websitePolicy?: WebsitePolicy | null },
+) => Promise<string | null>;
 
 export interface SearchEngineOptions {
   transport?: FetchTransport;
@@ -488,6 +492,8 @@ export interface SearchEngineOptions {
   engines?: string[];
   engineWeights?: Record<string, number>;
   maxPerHost?: number;
+  renderFallback?: boolean;
+  renderPage?: SearchRenderPage;
 }
 
 export interface EngineContext extends SearchEngineOptions {
@@ -499,6 +505,12 @@ export interface Engine {
   name: string;
   provider: string;
   search(
+    query: string,
+    ctx: EngineContext,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<SearchResult[] | null>;
+  render?(
     query: string,
     ctx: EngineContext,
     timeoutMs: number,
@@ -727,6 +739,49 @@ async function httpFetch(
   return null;
 }
 
+function searchUrl(url: string, params: Record<string, string>): string {
+  const target = new URL(url);
+  for (const [key, value] of Object.entries(params)) target.searchParams.set(key, value);
+  return target.toString();
+}
+
+async function renderEnginePage(
+  url: string,
+  ctx: EngineContext,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  parse: (html: string) => SearchResult[],
+): Promise<SearchResult[] | null> {
+  if (!ctx.renderPage) return null;
+  const html = await ctx.renderPage(url, { timeoutMs, signal, websitePolicy: ctx.policy ?? null });
+  return html === null ? null : parse(html);
+}
+
+function parseDuckDuckGoResults(html: string): SearchResult[] {
+  const results = extractResults(html, "//div[contains(@class, 'body')]", {
+    title: ".//h2//text()",
+    href: "./a/@href",
+    body: "./a//text()",
+  });
+  return results.filter((r) => !r.href.startsWith("https://duckduckgo.com/y.js?"));
+}
+
+function parseYandexResults(html: string): SearchResult[] {
+  return extractResults(html, "//li[contains(@class, 'serp-item')]", {
+    title: ".//h3//text()",
+    href: ".//h3//a/@href",
+    body: ".//div[contains(@class, 'text')]//text()",
+  });
+}
+
+function parseStartpageResults(html: string): SearchResult[] {
+  return extractResults(html, "//div[contains(@class, 'result')][./a]", {
+    title: ".//h2//text()",
+    href: "./a/@href",
+    body: ".//p//text()",
+  });
+}
+
 const DUCKDUCKGO: Engine = {
   name: "duckduckgo",
   provider: "bing",
@@ -737,12 +792,16 @@ const DUCKDUCKGO: Engine = {
       { headers: { "User-Agent": randomUserAgent() }, timeoutMs, signal, ctx },
     );
     if (!html) return null;
-    const results = extractResults(html, "//div[contains(@class, 'body')]", {
-      title: ".//h2//text()",
-      href: "./a/@href",
-      body: "./a//text()",
-    });
-    return results.filter((r) => !r.href.startsWith("https://duckduckgo.com/y.js?"));
+    return parseDuckDuckGoResults(html);
+  },
+  render(query, ctx, timeoutMs, signal) {
+    return renderEnginePage(
+      searchUrl("https://html.duckduckgo.com/html/", { q: query, l: ctx.region }),
+      ctx,
+      timeoutMs,
+      signal,
+      parseDuckDuckGoResults,
+    );
   },
 };
 
@@ -757,11 +816,17 @@ const YANDEX: Engine = {
       { timeoutMs, signal, ctx },
     );
     if (!html) return null;
-    return extractResults(html, "//li[contains(@class, 'serp-item')]", {
-      title: ".//h3//text()",
-      href: ".//h3//a/@href",
-      body: ".//div[contains(@class, 'text')]//text()",
-    });
+    return parseYandexResults(html);
+  },
+  render(query, ctx, timeoutMs, signal) {
+    const searchid = 1000000 + Math.floor(Math.random() * 9000000);
+    return renderEnginePage(
+      searchUrl("https://yandex.com/search/site/", { text: query, web: "1", searchid: String(searchid) }),
+      ctx,
+      timeoutMs,
+      signal,
+      parseYandexResults,
+    );
   },
 };
 
@@ -776,11 +841,17 @@ const START_PAGE: Engine = {
       { headers: { Referer: "https://www.startpage.com/" }, timeoutMs, signal, ctx },
     );
     if (!html) return null;
-    return extractResults(html, "//div[contains(@class, 'result')][./a]", {
-      title: ".//h2//text()",
-      href: "./a/@href",
-      body: ".//p//text()",
-    });
+    return parseStartpageResults(html);
+  },
+  render(query, ctx, timeoutMs, signal) {
+    const [country, lang] = ctx.region.toLowerCase().split("-");
+    return renderEnginePage(
+      searchUrl("https://www.startpage.com/sp/search", { query, qsr: `${lang}_${country.toUpperCase()}` }),
+      ctx,
+      timeoutMs,
+      signal,
+      parseStartpageResults,
+    );
   },
 };
 
@@ -940,6 +1011,8 @@ export async function autoTextSearch(
     transport: options.transport ?? DEFAULT_ENGINE_TRANSPORT,
     policy: options.policy ?? null,
     impersonate: options.impersonate,
+    renderFallback: options.renderFallback,
+    renderPage: options.renderPage,
   };
   const controller = new AbortController();
   let onAbort: (() => void) | undefined;
@@ -991,6 +1064,25 @@ export async function autoTextSearch(
           return;
         }
         if (controller.signal.aborted) return;
+      }
+    }
+
+    if (!results?.length && engine.render && ctx.renderFallback && !controller.signal.aborted) {
+      const budgetLeft = deadline - Date.now();
+      if (budgetLeft <= 0) return;
+      const engineSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+      try {
+        results = await engine.render(query, ctx, Math.max(1, budgetLeft), engineSignal);
+      } catch (e) {
+        if (e instanceof SearchCancelled) {
+          if (controller.signal.aborted && !signal?.aborted) return;
+          cancelled = true;
+          return;
+        }
+        if (e instanceof SearchTimeoutError) {
+          timedOutProviders.add(engine.name);
+          return;
+        }
       }
     }
     if (results && results.length) {

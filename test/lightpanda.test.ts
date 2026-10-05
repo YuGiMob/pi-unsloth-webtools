@@ -2,7 +2,13 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { lightpandaBinary, lightpandaLaunch, renderPageWithLightpanda, type LightpandaSpawn } from "../lightpanda.ts";
+import {
+  lightpandaBinary,
+  lightpandaLaunch,
+  renderPageHtml,
+  renderPageWithLightpanda,
+  type LightpandaSpawn,
+} from "../lightpanda.ts";
 
 interface SpawnCall {
   binary: string;
@@ -247,6 +253,42 @@ describe("renderPageWithLightpanda", () => {
   it("refuses an empty url", async () => {
     const { spawnImpl } = spawnRendering(PUBLIC_PAGE);
     expect(await renderPageWithLightpanda("   ", { spawn: spawnImpl })).toBe("Blocked: the URL is empty.");
+  });
+});
+
+describe("renderPageHtml", () => {
+  it("returns the raw html dump without conversion or provenance", async () => {
+    const { spawnImpl, calls } = spawnRendering(PUBLIC_PAGE);
+    const out = await renderPageHtml("https://example.com/search", {
+      spawn: spawnImpl,
+      resolve: resolvePublic,
+    });
+    expect(out).toBe(PUBLIC_PAGE);
+    const fetchCall = calls.find((call) => call.args[0] === "fetch");
+    expect(fetchCall?.args).toContain("--dump");
+    expect(fetchCall?.args).toContain("html");
+  });
+
+  it("returns null when no binary is available", async () => {
+    const { spawnImpl } = makeSpawn(() => ({ errorCode: "ENOENT" }));
+    expect(await renderPageHtml("https://example.com/", { spawn: spawnImpl })).toBeNull();
+  });
+
+  it("refuses local files and disallowed hosts with null", async () => {
+    const { spawnImpl, calls } = spawnRendering(PUBLIC_PAGE);
+    expect(await renderPageHtml("file:///tmp/page.html", { spawn: spawnImpl })).toBeNull();
+    expect(
+      await renderPageHtml("https://example.com/", {
+        spawn: spawnImpl,
+        websitePolicy: { allowedDomains: ["docs.example.com"], blockedDomains: [] },
+      }),
+    ).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("returns null for an empty dump", async () => {
+    const { spawnImpl } = spawnRendering("");
+    expect(await renderPageHtml("https://example.com/", { spawn: spawnImpl, resolve: resolvePublic })).toBeNull();
   });
 });
 

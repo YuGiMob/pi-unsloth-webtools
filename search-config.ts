@@ -5,7 +5,7 @@ import { Container, SettingsList, Text } from "@earendil-works/pi-tui";
 import type { Component, SettingItem, SettingsListTheme } from "@earendil-works/pi-tui";
 import { agentDir } from "./agent-dir.ts";
 import { DEFAULT_ENGINE_NAMES, TEXT_ENGINES } from "./engines.ts";
-import { loadEngineSettings } from "./settings.ts";
+import { loadSearchSettings } from "./settings.ts";
 
 const ENGINE_LABELS: Record<string, string> = {
   duckduckgo: "DuckDuckGo",
@@ -19,8 +19,19 @@ const ENGINE_HINTS: Record<string, string> = {
   yandex: "Opt-in. Yandex results are only searched while this stays on.",
 };
 
-export interface EngineSelection {
-  names: string[];
+const ENGINE_SETTING_PATHS = [
+  ["unslothWebTools", "engines"],
+  ["webSearch", "engines"],
+] as const;
+
+const LIGHTPANDA_FALLBACK_SETTING_PATHS = [
+  ["unslothWebTools", "lightpandaFallback"],
+  ["webSearch", "lightpandaFallback"],
+] as const;
+
+export interface SearchConfig {
+  engines: string[];
+  lightpandaFallback: boolean;
   file: string;
 }
 
@@ -28,17 +39,18 @@ function knownEngineNames(): Set<string> {
   return new Set(TEXT_ENGINES.map((engine) => engine.name));
 }
 
-export async function readEngineSelection(cwd?: string): Promise<EngineSelection> {
-  const { engines, sourceFile } = await loadEngineSettings(cwd);
+export async function readSearchConfig(cwd?: string): Promise<SearchConfig> {
+  const { engines, lightpandaFallback, sourceFile } = await loadSearchSettings(cwd);
   const known = knownEngineNames();
   const listed = (engines ?? [])
     .map((name) => name.trim().toLowerCase())
     .filter((name) => known.has(name));
   const names = listed.length ? [...new Set(listed)] : [...DEFAULT_ENGINE_NAMES];
-  if (sourceFile) return { names, file: sourceFile };
+  const fallback = lightpandaFallback === true;
+  if (sourceFile) return { engines: names, lightpandaFallback: fallback, file: sourceFile };
   const base = agentDir();
   if (!base) throw new Error("could not resolve the pi agent directory");
-  return { names, file: join(base, "settings.json") };
+  return { engines: names, lightpandaFallback: fallback, file: join(base, "settings.json") };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -74,24 +86,33 @@ async function writeSettingsObject(file: string, data: Record<string, unknown>):
   }
 }
 
-export async function saveEngineSelection(file: string, names: string[]): Promise<void> {
-  const data = await readSettingsObject(file);
+function setSettingValue(
+  data: Record<string, unknown>,
+  paths: readonly (readonly [string, string])[],
+  value: unknown,
+): void {
   let updated = false;
-  for (const [section, key] of [
-    ["unslothWebTools", "engines"],
-    ["webSearch", "engines"],
-  ] as const) {
-    const value = data[section];
-    if (isRecord(value) && key in value) {
-      value[key] = names;
+  for (const [section, key] of paths) {
+    const sectionValue = data[section];
+    if (isRecord(sectionValue) && key in sectionValue) {
+      sectionValue[key] = value;
       updated = true;
     }
   }
-  if (!updated) {
-    const webSearch = data["webSearch"];
-    if (isRecord(webSearch)) webSearch["engines"] = names;
-    else data["webSearch"] = { engines: names };
-  }
+  if (updated) return;
+  const [section, key] = paths[paths.length - 1];
+  const sectionValue = data[section];
+  if (isRecord(sectionValue)) sectionValue[key] = value;
+  else data[section] = { [key]: value };
+}
+
+export async function saveSearchConfig(
+  file: string,
+  config: { engines: string[]; lightpandaFallback: boolean },
+): Promise<void> {
+  const data = await readSettingsObject(file);
+  setSettingValue(data, ENGINE_SETTING_PATHS, config.engines);
+  setSettingValue(data, LIGHTPANDA_FALLBACK_SETTING_PATHS, config.lightpandaFallback);
   await writeSettingsObject(file, data);
 }
 
@@ -124,27 +145,28 @@ function rule(theme: Theme): Component {
   };
 }
 
-export async function openEngineConfig(ctx: ExtensionCommandContext): Promise<void> {
+export async function openSearchConfig(ctx: ExtensionCommandContext): Promise<void> {
   if (ctx.mode !== "tui") {
-    ctx.ui.notify("/search-engines requires interactive mode", "error");
+    ctx.ui.notify("/search-config requires interactive mode", "error");
     return;
   }
-  let selection: EngineSelection;
+  let config: SearchConfig;
   try {
-    selection = await readEngineSelection(ctx.cwd);
+    config = await readSearchConfig(ctx.cwd);
   } catch (error) {
-    ctx.ui.notify(`Search engines: ${error instanceof Error ? error.message : String(error)}`, "error");
+    ctx.ui.notify(`Search config: ${error instanceof Error ? error.message : String(error)}`, "error");
     return;
   }
   await ctx.ui.custom<void>(
     (tui, theme, _keybindings, done) => {
-      let enabled = new Set(selection.names);
+      let engines = new Set(config.engines);
+      let lightpandaFallback = config.lightpandaFallback;
       let list: SettingsList;
       const status = new Text("", 1, 0);
-      const persist = (names: string[]) => {
-        void saveEngineSelection(selection.file, names)
+      const persist = () => {
+        void saveSearchConfig(config.file, { engines: [...engines], lightpandaFallback })
           .then(
-            () => status.setText(theme.fg("dim", `Saved to ${selection.file}`)),
+            () => status.setText(theme.fg("dim", `Saved to ${config.file}`)),
             (error: unknown) =>
               status.setText(theme.fg("error", `Save failed: ${error instanceof Error ? error.message : String(error)}`)),
           )
@@ -154,28 +176,43 @@ export async function openEngineConfig(ctx: ExtensionCommandContext): Promise<vo
         ...engineOrder().map((name) => ({
           id: name,
           label: ENGINE_LABELS[name] ?? name,
-          currentValue: enabled.has(name) ? "on" : "off",
+          currentValue: engines.has(name) ? "on" : "off",
           values: ["on", "off"],
           description: ENGINE_HINTS[name] ?? "",
         })),
+        {
+          id: "lightpandaFallback",
+          label: "Lightpanda fallback",
+          currentValue: lightpandaFallback ? "on" : "off",
+          values: ["on", "off"],
+          description:
+            "Render an engine page locally with Lightpanda when the network transports return no results (off by default).",
+        },
         {
           id: "reset",
           label: "Reset",
           currentValue: "defaults",
           values: ["defaults"],
-          description: `Enable ${DEFAULT_ENGINE_NAMES.join(" and ")}; Yandex stays off.`,
+          description: `Enable ${DEFAULT_ENGINE_NAMES.join(" and ")}; Lightpanda fallback off.`,
         },
       ];
       const onChange = (id: string, value: string) => {
         if (id === "reset") {
-          enabled = new Set(DEFAULT_ENGINE_NAMES);
+          engines = new Set(DEFAULT_ENGINE_NAMES);
+          lightpandaFallback = false;
           for (const item of items) {
-            if (item.id !== "reset") list.updateValue(item.id, enabled.has(item.id) ? "on" : "off");
+            if (item.id === "lightpandaFallback") list.updateValue(item.id, "off");
+            else if (item.id !== "reset") list.updateValue(item.id, engines.has(item.id) ? "on" : "off");
           }
-          persist([...enabled]);
+          persist();
           return;
         }
-        const next = new Set(enabled);
+        if (id === "lightpandaFallback") {
+          lightpandaFallback = value === "on";
+          persist();
+          return;
+        }
+        const next = new Set(engines);
         if (value === "on") next.add(id);
         else next.delete(id);
         if (!next.size) {
@@ -183,15 +220,15 @@ export async function openEngineConfig(ctx: ExtensionCommandContext): Promise<vo
           tui.requestRender();
           return;
         }
-        enabled = next;
-        persist([...enabled]);
+        engines = next;
+        persist();
       };
       list = new SettingsList(items, items.length, settingsTheme(theme), onChange, () => done());
       const container = new Container();
       container.addChild(rule(theme));
-      container.addChild(new Text(theme.fg("accent", theme.bold("Search engines")), 1, 0));
+      container.addChild(new Text(theme.fg("accent", theme.bold("Search config")), 1, 0));
       container.addChild(
-        new Text(theme.fg("dim", "The web_search sweep queries every engine marked on; at least one stays on."), 1, 0),
+        new Text(theme.fg("dim", "Applies to the web_search sweep; at least one engine stays on."), 1, 0),
       );
       container.addChild(list);
       container.addChild(status);

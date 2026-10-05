@@ -1,7 +1,7 @@
 import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { openEngineConfig } from "./engine-config.ts";
+import { openSearchConfig } from "./search-config.ts";
 import { collapseWhitespace, visibleChars } from "./html-to-md.ts";
 import { SEARCH_TIMEOUT_MS, webSearch as defaultWebSearch } from "./web-search.ts";
 import {
@@ -17,6 +17,7 @@ import {
   loadDefaultFetchSettings,
   loadDefaultMaxPerHost,
   loadLightpandaSettings,
+  loadSearchLightpandaFallback,
 } from "./settings.ts";
 
 function toolCallLine(theme: Theme, name: string, detail: string) {
@@ -190,6 +191,7 @@ export function createWebTools(deps: WebToolsDeps = {}) {
         const searchEngines = await loadDefaultEngines(searchCwd);
         const searchEngineWeights = await loadDefaultEngineWeights(searchCwd);
         const searchMaxPerHost = await loadDefaultMaxPerHost(searchCwd);
+        const searchLightpandaFallback = await loadSearchLightpandaFallback(searchCwd);
         const searchTimeoutMs = timeoutParam ?? searchSettings.timeoutMs ?? SEARCH_TIMEOUT_MS;
         const text = await webSearch(params.query, {
           signal: signal ?? undefined,
@@ -200,6 +202,7 @@ export function createWebTools(deps: WebToolsDeps = {}) {
           engines: searchEngines,
           engineWeights: searchEngineWeights,
           maxPerHost: searchMaxPerHost,
+          lightpandaFallback: searchLightpandaFallback === true,
         });
         return { content: [{ type: "text", text }], details: {} };
       },
@@ -256,10 +259,10 @@ export default function (pi: ExtensionAPI) {
   const { webSearchTool, webFetchTool } = createWebTools();
   pi.registerTool(webSearchTool);
   pi.registerTool(webFetchTool);
-  pi.registerCommand("search-engines", {
-    description: "Toggle which engines web_search queries (duckduckgo and startpage by default; yandex opt-in)",
+  pi.registerCommand("search-config", {
+    description: "Configure web_search: enabled engines and the Lightpanda render fallback",
     handler: async (_args, ctx) => {
-      await openEngineConfig(ctx);
+      await openSearchConfig(ctx);
     },
   });
 }

@@ -35,10 +35,10 @@ function makeHarness(): { tools: string[]; commands: string[]; handlers: string[
 }
 
 describe("extension registration", () => {
-  it("registers the web tools and the search engines command", () => {
+  it("registers the web tools and the search config command", () => {
     const harness = makeHarness();
     expect(harness.tools).toEqual(["web_search", "web_fetch"]);
-    expect(harness.commands).toEqual(["search-engines"]);
+    expect(harness.commands).toEqual(["search-config"]);
     expect(harness.handlers).toEqual([]);
   });
 });
@@ -63,6 +63,7 @@ describe("web_search tool", () => {
       cwd: undefined,
       transport: "tls-first",
       engines: undefined,
+      lightpandaFallback: false,
     });
     expect(result.content[0]).toMatchObject({ type: "text", text: "results" });
   });

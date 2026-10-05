@@ -168,6 +168,12 @@ There is no third tier. If a page needs a browser that the local renderer cannot
 original error (or the incomplete-content note) is returned rather than shipping the URL to a
 third-party rendering service.
 
+`web_search` can opt into the local renderer as its last escalation step: with
+`webSearch.lightpandaFallback: true`, an engine that yields no usable results over both network
+transports has its search page rendered locally and parsed again. It is off by default, and
+Lightpanda's honest user agent means it does not defeat proof-of-work walls (Anubis, Cloudflare) —
+it only rescues engines that dislike plain HTTP clients.
+
 #### Local rendering (Lightpanda)
 
 - Runs `lightpanda fetch --dump html --wait-until networkidle --block-private-networks` and puts
@@ -230,7 +236,9 @@ third-party rendering service.
   transport `web_fetch` uses), so engine fingerprints match Chrome rather than Node's `fetch`;
   the plain Node transport is the fallback. User agents on that fallback are a fixed browser set,
   not `fake_useragent`'s database. DuckDuckGo and Startpage are on by default; Yandex stays
-  opt-in (turn it on with `webSearch.engines` or `/search-engines`).
+  opt-in (turn it on with `webSearch.engines` or `/search-config`). With
+  `webSearch.lightpandaFallback`, an engine that returns nothing over both transports is rendered
+  locally with Lightpanda and its dump re-parsed.
 - Startpage: an extra engine beyond Studio's set, matching newer ddgs (its Google-backed index
   means it fills the `google` provider slot). It answers a plain `GET /sp/search?query=` and
   serves an Anubis proof-of-work challenge to clients that do not look like a browser, so it works
@@ -243,7 +251,7 @@ third-party rendering service.
   testing), and wikipedia is an API for a source the other engines already return — so the sweep
   no longer spends a slot on it, and `wikipedia.org` results are ranked like any other instead of
   being forced to the top. DuckDuckGo and Startpage run by default and Yandex is opt-in; the sweep
-  can be narrowed further per machine with `webSearch.engines` or the `/search-engines` command
+  can be narrowed further per machine with `webSearch.engines` or the `/search-config` command
   (see Configuration).
 - Ranking: Studio's `SimpleFilterRanker` (keyword buckets with `wikipedia.org` pinned first) is
   replaced by weighted reciprocal-rank fusion over each engine's own ordering. On the
@@ -332,8 +340,9 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 }
 ```
 
-Run `/search-engines` in the TUI to toggle the sweep. It writes `webSearch.engines` to the settings
-file that already overrides the list, or the global `~/.pi/agent/settings.json` when none does.
+Run `/search-config` in the TUI to toggle the sweep and the Lightpanda render fallback. It writes
+`webSearch.engines` and `webSearch.lightpandaFallback` to the settings file that already overrides
+them, or the global `~/.pi/agent/settings.json` when none does.
 
 | Key | Default | Description |
 |---|---|---|
@@ -348,7 +357,8 @@ file that already overrides the list, or the global `~/.pi/agent/settings.json` 
 | `webSearch.engines` / `unslothWebTools.engines` | duckduckgo, startpage (yandex opt-in) | Restrict `web_search` to a subset of engine names, e.g. `["duckduckgo", "startpage", "yandex"]`; unknown names are ignored, and a list that matches nothing falls back to the default engines |
 | `webSearch.engineWeights` / `unslothWebTools.engineWeights` | all `1` | Per-engine fusion weight, e.g. `{"startpage": 2, "yandex": 0.5}`; only positive numbers are read |
 | `webSearch.maxPerHost` / `unslothWebTools.maxPerHost` | `0` (no cap) | Most results one registrable domain may contribute; `0` disables the cap |
-| `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering |
+| `webSearch.lightpandaFallback` / `unslothWebTools.lightpandaFallback` | `false` | Render an engine page locally with Lightpanda when both network transports return nothing, then parse the dump; requires the local renderer and is off by default |
+| `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering for both tools (the `web_fetch` tier and the `web_search` fallback) |
 | `webRender.lightpandaPath` / `unslothWebTools.lightpandaPath` | launcher installed by `scripts/install-lightpanda.sh`, else `lightpanda` on `PATH` | Path to the Lightpanda binary used for local rendering |
 | `webRender.lightpandaCommand` / `unslothWebTools.lightpandaCommand` | none | Command prefix that launches the renderer, for WSL (`["wsl.exe","-e","<path>"]`) or containers; overrides `lightpandaPath`. The fetch flags are appended to it |
 
@@ -430,8 +440,9 @@ The suite ports Unsloth Studio's own tests for these tools:
   (from `test_web_fetch_extraction.py`; the fetch client is injected via seams)
 - `test/engines.test.ts`: the ddgs engine port, normalizers, the XPath subset, the
   reciprocal-rank aggregator, the per-host cap, and the Startpage engine with a stubbed fetch
-- `test/engine-config.test.ts`: the default engine sweep (duckduckgo and startpage on, yandex
-  opt-in) and the engine settings reader/writer behind `/search-engines`
+- `test/search-config.test.ts`: the default engine sweep (duckduckgo and startpage on, yandex
+  opt-in), the engine/render settings reader and writer, and the command overlay behind
+  `/search-config`
 - `test/pdf-parity.test.ts`: MuPDF engine capabilities, PDF 1.5 object streams,
   ASCII85Decode, font `/Differences` encodings, pymupdf4llm-style headings/links/tables
 - `test/entities.test.ts`: `decodeHtmlEntities` parity with CPython `html.unescape`,

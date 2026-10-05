@@ -37,7 +37,7 @@
     "cache.ts",
     "settings.ts",
     "agent-dir.ts",
-    "engine-config.ts",
+    "search-config.ts",
     "README.md",
     "LICENSE",
     "scripts/install-lightpanda.sh"
