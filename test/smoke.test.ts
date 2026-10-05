@@ -56,7 +56,7 @@ describe("live smoke", () => {
     const ctx = { region: "us-en", safesearch: "moderate", transport: "tls-first" as const };
     let healthy = 0;
     const unhealthy: string[] = [];
-    for (const engine of TEXT_ENGINES) {
+    for (const engine of TEXT_ENGINES.filter((candidate) => candidate.renderOnly !== true)) {
       let results: SearchResult[] | null;
       try {
         results = await engine.search("unsloth", ctx, 20_000);

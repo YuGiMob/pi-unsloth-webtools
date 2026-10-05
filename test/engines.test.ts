@@ -25,6 +25,22 @@ function ddgResultsHtml(count: number): string {
   ).join("");
 }
 
+function braveResultsHtml(count: number): string {
+  return Array.from(
+    { length: count },
+    (_, i) =>
+      `<div class="result-wrapper"><a href="https://b${i}.example/hit"><div class="title search-snippet-title">B${i}</div></a><div class="generic-snippet">Snippet ${i}.</div></div>`,
+  ).join("");
+}
+
+function yahooResultsHtml(count: number): string {
+  return Array.from(
+    { length: count },
+    (_, i) =>
+      `<li><a href="https://y${i}.example/hit"><h3 class="title">Y${i}</h3></a><div class="compText">Snippet ${i}.</div></li>`,
+  ).join("");
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -708,5 +724,68 @@ describe("engine render fallback", () => {
     const urls = renderPage.mock.calls.map(([url]) => String(url));
     expect(urls.some((url) => url.includes("yandex.com/search/site/") && url.includes("text=cat"))).toBe(true);
     expect(urls.some((url) => url.includes("startpage.com/sp/search") && url.includes("query=cat"))).toBe(true);
+  });
+});
+
+describe("render-only engines", () => {
+  it("renders brave and yahoo without touching the network", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("network must not run for render-only engines");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const renderPage = vi.fn(async (url: string) =>
+      url.includes("brave.com") ? braveResultsHtml(3) : yahooResultsHtml(2),
+    );
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, {
+      engines: ["brave", "yahoo"],
+      renderFallback: true,
+      renderPage,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(renderPage).toHaveBeenCalledTimes(2);
+    expect(results.length).toBe(5);
+    expect(results.find((result) => result.href === "https://b0.example/hit")).toMatchObject({
+      title: "B0",
+      body: "Snippet 0.",
+    });
+    expect(results.find((result) => result.href === "https://y0.example/hit")).toMatchObject({
+      title: "Y0",
+      body: "Snippet 0.",
+    });
+    const urls = renderPage.mock.calls.map(([url]) => String(url));
+    expect(urls.some((url) => url.includes("search.brave.com") && url.includes("q=cat"))).toBe(true);
+    expect(urls.some((url) => url.includes("search.yahoo.com") && url.includes("p=cat"))).toBe(true);
+  });
+
+  it("drops render-only engines when the fallback is off", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(String(url));
+        return new Response(ddgResultsHtml(2), { status: 200 });
+      }),
+    );
+    const renderPage = vi.fn(async () => braveResultsHtml(1));
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, { engines: ["brave", "duckduckgo"], renderPage });
+    expect(results.length).toBe(2);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("duckduckgo");
+    expect(renderPage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the default engines when the selection only renders", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(String(url));
+        return new Response("<html><body></body></html>", { status: 200 });
+      }),
+    );
+    await expect(autoTextSearch("cat", 5, 10_000, undefined, { engines: ["brave"] })).rejects.toThrow(EmptySweepError);
+    expect(calls).toHaveLength(2);
+    expect(calls.some((url) => url.includes("duckduckgo.com"))).toBe(true);
+    expect(calls.some((url) => url.includes("startpage.com"))).toBe(true);
   });
 });

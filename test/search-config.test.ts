@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openSearchConfig, readSearchConfig, saveSearchConfig } from "../search-config.ts";
+import { openSearchConfig, readSearchConfig, saveSearchConfig, toggleSearchConfig } from "../search-config.ts";
 import { DEFAULT_ENGINE_NAMES } from "../engines.ts";
 
 let root: string;
@@ -49,6 +49,32 @@ describe("search config reads", () => {
     const config = await readSearchConfig();
     expect(config.engines).toEqual([...DEFAULT_ENGINE_NAMES]);
     expect(config.file).toBe(file);
+  });
+
+  it("drops render-only engines when the fallback is off", async () => {
+    const file = join(root, "agent", "settings.json");
+    await mkdir(join(root, "agent"), { recursive: true });
+    await writeFile(file, JSON.stringify({ webSearch: { engines: ["brave", "yahoo", "duckduckgo"] } }));
+    const config = await readSearchConfig();
+    expect(config.engines).toEqual(["duckduckgo"]);
+    expect(config.lightpandaFallback).toBe(false);
+  });
+
+  it("restores the default engines when only render-only engines are selected", async () => {
+    const file = join(root, "agent", "settings.json");
+    await mkdir(join(root, "agent"), { recursive: true });
+    await writeFile(file, JSON.stringify({ webSearch: { engines: ["brave"] } }));
+    const config = await readSearchConfig();
+    expect(config.engines).toEqual([...DEFAULT_ENGINE_NAMES]);
+  });
+
+  it("keeps render-only engines when the fallback is on", async () => {
+    const file = join(root, "agent", "settings.json");
+    await mkdir(join(root, "agent"), { recursive: true });
+    await writeFile(file, JSON.stringify({ webSearch: { engines: ["brave"], lightpandaFallback: true } }));
+    const config = await readSearchConfig();
+    expect(config.engines).toEqual(["brave"]);
+    expect(config.lightpandaFallback).toBe(true);
   });
 });
 
@@ -101,6 +127,42 @@ describe("search config writes", () => {
   });
 });
 
+describe("search config toggles", () => {
+  it("turns the fallback on when a render-only engine is enabled", () => {
+    const draft = { engines: new Set(["duckduckgo", "startpage"]), lightpandaFallback: false };
+    expect(toggleSearchConfig(draft, "brave", "on")).toBe(true);
+    expect(draft.lightpandaFallback).toBe(true);
+    expect([...draft.engines]).toContain("brave");
+  });
+
+  it("turns render-only engines off and restores defaults when the fallback is disabled", () => {
+    const draft = { engines: new Set(["brave", "yahoo"]), lightpandaFallback: true };
+    expect(toggleSearchConfig(draft, "lightpandaFallback", "off")).toBe(true);
+    expect(draft.lightpandaFallback).toBe(false);
+    expect([...draft.engines]).toEqual([...DEFAULT_ENGINE_NAMES]);
+  });
+
+  it("keeps regular engines when the fallback is disabled", () => {
+    const draft = { engines: new Set(["duckduckgo", "brave"]), lightpandaFallback: true };
+    toggleSearchConfig(draft, "lightpandaFallback", "off");
+    expect([...draft.engines]).toEqual(["duckduckgo"]);
+    expect(draft.lightpandaFallback).toBe(false);
+  });
+
+  it("refuses to turn off the last engine", () => {
+    const draft = { engines: new Set(["brave"]), lightpandaFallback: true };
+    expect(toggleSearchConfig(draft, "brave", "off")).toBe(false);
+    expect([...draft.engines]).toEqual(["brave"]);
+  });
+
+  it("resets to the shipped defaults", () => {
+    const draft = { engines: new Set(["brave", "yandex"]), lightpandaFallback: true };
+    toggleSearchConfig(draft, "reset", "defaults");
+    expect([...draft.engines]).toEqual([...DEFAULT_ENGINE_NAMES]);
+    expect(draft.lightpandaFallback).toBe(false);
+  });
+});
+
 describe("search config command", () => {
   it("requires interactive mode", async () => {
     const notify = vi.fn();
@@ -131,5 +193,7 @@ describe("search config command", () => {
     expect(rendered).toMatch(/Startpage\s+on/);
     expect(rendered).toMatch(/Yandex\s+off/);
     expect(rendered).toMatch(/Lightpanda fallback\s+off/);
+    expect(rendered).toMatch(/Brave\s+off/);
+    expect(rendered).toMatch(/Yahoo\s+off/);
   });
 });

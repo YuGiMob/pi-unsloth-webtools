@@ -504,6 +504,7 @@ export interface EngineContext extends SearchEngineOptions {
 export interface Engine {
   name: string;
   provider: string;
+  renderOnly?: boolean;
   search(
     query: string,
     ctx: EngineContext,
@@ -782,6 +783,22 @@ function parseStartpageResults(html: string): SearchResult[] {
   });
 }
 
+function parseYahooResults(html: string): SearchResult[] {
+  return extractResults(html, "//li[.//h3[@class='title']]", {
+    title: ".//h3//text()",
+    href: ".//a[.//h3]/@href",
+    body: ".//div[contains(@class, 'compText')]//text()",
+  });
+}
+
+function parseBraveResults(html: string): SearchResult[] {
+  return extractResults(html, "//div[contains(@class, 'result-wrapper')]", {
+    title: ".//div[contains(@class, 'title')]//text()",
+    href: ".//a[div[contains(@class, 'title')]]/@href",
+    body: ".//div[contains(@class, 'generic-snippet')]//text()",
+  });
+}
+
 const DUCKDUCKGO: Engine = {
   name: "duckduckgo",
   provider: "bing",
@@ -855,7 +872,43 @@ const START_PAGE: Engine = {
   },
 };
 
-export const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, YANDEX, START_PAGE];
+const YAHOO: Engine = {
+  name: "yahoo",
+  provider: "yahoo",
+  renderOnly: true,
+  async search() {
+    return null;
+  },
+  render(query, ctx, timeoutMs, signal) {
+    return renderEnginePage(
+      searchUrl("https://search.yahoo.com/search", { p: query }),
+      ctx,
+      timeoutMs,
+      signal,
+      parseYahooResults,
+    );
+  },
+};
+
+const BRAVE: Engine = {
+  name: "brave",
+  provider: "brave",
+  renderOnly: true,
+  async search() {
+    return null;
+  },
+  render(query, ctx, timeoutMs, signal) {
+    return renderEnginePage(
+      searchUrl("https://search.brave.com/search", { q: query }),
+      ctx,
+      timeoutMs,
+      signal,
+      parseBraveResults,
+    );
+  },
+};
+
+export const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, YANDEX, START_PAGE, YAHOO, BRAVE];
 
 export const DEFAULT_ENGINE_NAMES = ["duckduckgo", "startpage"] as const;
 
@@ -975,9 +1028,11 @@ function defaultEngines(): Engine[] {
   return TEXT_ENGINES.filter((engine) => wanted.has(engine.name));
 }
 
-function selectedEngines(names: string[] | undefined): Engine[] {
+function selectedEngines(names: string[] | undefined, renderEnabled: boolean): Engine[] {
   const wanted = new Set((names?.length ? names : DEFAULT_ENGINE_NAMES).map((name) => name.trim().toLowerCase()));
-  const chosen = TEXT_ENGINES.filter((engine) => wanted.has(engine.name));
+  const chosen = TEXT_ENGINES.filter((engine) => wanted.has(engine.name)).filter(
+    (engine) => renderEnabled || engine.renderOnly !== true,
+  );
   return chosen.length ? chosen : defaultEngines();
 }
 
@@ -998,7 +1053,8 @@ export async function autoTextSearch(
   options: SearchEngineOptions = {},
 ): Promise<SearchResult[]> {
   const started = Date.now();
-  const engines = shuffledEngines(selectedEngines(options.engines));
+  const renderEnabled = options.renderFallback === true && options.renderPage !== undefined;
+  const engines = shuffledEngines(selectedEngines(options.engines, renderEnabled));
   const deadline = started + timeoutMs;
   const seenProviders = new Set<string>();
   const aggregator = new ResultsAggregator();
@@ -1031,7 +1087,7 @@ export async function autoTextSearch(
   const pending = new Set<Promise<void>>();
   const run = async (engine: Engine) => {
     let results: SearchResult[] | null = null;
-    for (let attempt = 0; attempt < 2 && results === null; attempt++) {
+    for (let attempt = 0; !engine.renderOnly && attempt < 2 && results === null; attempt++) {
       if (controller.signal.aborted) {
         if (signal?.aborted) cancelled = true;
         return;

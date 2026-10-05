@@ -38,9 +38,9 @@ Both tools display their target in the TUI tool row: `web_search "query"` and `w
 
 Mirrors Unsloth Studio's `web_search` tool:
 
-- Searches like Studio's pinned `ddgs==9.14.4` `DDGS.text()`: the Studio engines that still work
-  here (duckduckgo; yandex is opt-in; the others are behind bot walls, see
-  [Known differences from Studio](#known-differences-from-studio)) plus startpage,
+- Searches like Studio's pinned `ddgs==9.14.4` `DDGS.text()`: duckduckgo and startpage on by
+  default, plus opt-in yandex and render-only brave and yahoo; the other Studio engines are behind
+  bot walls (see [Known differences from Studio](#known-differences-from-studio)), with
   the same provider deduplication, and an href-dedupe aggregator (hrefs are
   canonicalized first — `utm_*`/tracking parameters and fragments are dropped and the URL is
   re-serialized, collapsing host-case, default-port, and trailing-slash variants — so the
@@ -170,9 +170,10 @@ third-party rendering service.
 
 `web_search` can opt into the local renderer as its last escalation step: with
 `webSearch.lightpandaFallback: true`, an engine that yields no usable results over both network
-transports has its search page rendered locally and parsed again. It is off by default, and
-Lightpanda's honest user agent means it does not defeat proof-of-work walls (Anubis, Cloudflare) —
-it only rescues engines that dislike plain HTTP clients.
+transports has its search page rendered locally and parsed again. Brave and Yahoo go further and
+are render-only: they are never queried over the network transports, only through this tier. It is
+off by default, and Lightpanda's honest user agent means it does not defeat proof-of-work walls
+(Anubis, Cloudflare) — it only rescues engines that dislike plain HTTP clients.
 
 #### Local rendering (Lightpanda)
 
@@ -238,21 +239,23 @@ it only rescues engines that dislike plain HTTP clients.
   not `fake_useragent`'s database. DuckDuckGo and Startpage are on by default; Yandex stays
   opt-in (turn it on with `webSearch.engines` or `/search-config`). With
   `webSearch.lightpandaFallback`, an engine that returns nothing over both transports is rendered
-  locally with Lightpanda and its dump re-parsed.
+  locally with Lightpanda and its dump re-parsed. Brave and Yahoo are opt-in render-only engines,
+  swept only through the renderer and never over the network transports.
 - Startpage: an extra engine beyond Studio's set, matching newer ddgs (its Google-backed index
   means it fills the `google` provider slot). It answers a plain `GET /sp/search?query=` and
   serves an Anubis proof-of-work challenge to clients that do not look like a browser, so it works
   through the browser-fingerprint transport and the fallback's browser headers, but not a bare
   Node `fetch`. Startpage's POST endpoint and its safesearch parameter are challenge-gated and are
   not used.
-- Unused engines: mojeek, yahoo, google, brave and wikipedia are not part of the sweep. A
-  non-JavaScript client cannot get past mojeek (JavaScript challenge) or yahoo (`_bv` bot beacon),
-  google and brave answer rate limits and bot interstitials instead of results (HTTP 429 in
-  testing), and wikipedia is an API for a source the other engines already return — so the sweep
-  no longer spends a slot on it, and `wikipedia.org` results are ranked like any other instead of
-  being forced to the top. DuckDuckGo and Startpage run by default and Yandex is opt-in; the sweep
-  can be narrowed further per machine with `webSearch.engines` or the `/search-config` command
-  (see Configuration).
+- Unused engines: mojeek, google and wikipedia are not part of the sweep. Mojeek serves
+  "automated queries" blocks even to a rendered browser from a datacenter address, google answers
+  consent and `/sorry/` interstitials instead of results, and wikipedia is an API for a source the
+  other engines already return — so the sweep no longer spends a slot on it, and `wikipedia.org`
+  results are ranked like any other instead of being forced to the top. Yahoo and Brave were the
+  opposite case: both failed over the network transports and both were verified working through
+  the local renderer, so they are opt-in render-only engines. DuckDuckGo and Startpage run by
+  default and Yandex is opt-in; the sweep can be narrowed further per machine with
+  `webSearch.engines` or the `/search-config` command (see Configuration).
 - Ranking: Studio's `SimpleFilterRanker` (keyword buckets with `wikipedia.org` pinned first) is
   replaced by weighted reciprocal-rank fusion over each engine's own ordering. On the
   `npm run engine:eval` query set that lifts mean precision@5 from 0.28 (keyword buckets) to 0.35 —
@@ -277,8 +280,9 @@ it only rescues engines that dislike plain HTTP clients.
   the document `<title>`. Studio keys on raw hrefs and returns the converted body alone.
 - Upstream drift: current ddgs ships ten backends (adding bing, startpage, grokipedia),
   requires a `vqd` token for DuckDuckGo, and exposes an `extract()` mode. This port
-  uses duckduckgo and yandex from the Studio snapshot plus startpage — bing stays
-  disabled, no vqd, no pagination — so engine behavior matches Studio rather than ddgs head.
+  uses duckduckgo and yandex from the Studio snapshot plus startpage, and adds render-only brave
+  and yahoo — bing stays disabled, no vqd, no pagination — so engine behavior matches Studio rather
+  than ddgs head.
 
 ## When to use alternatives
 
@@ -340,9 +344,11 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 }
 ```
 
-Run `/search-config` in the TUI to toggle the sweep and the Lightpanda render fallback. It writes
-`webSearch.engines` and `webSearch.lightpandaFallback` to the settings file that already overrides
-them, or the global `~/.pi/agent/settings.json` when none does.
+Run `/search-config` in the TUI to toggle the sweep and the Lightpanda render fallback. Enabling
+brave or yahoo turns the fallback on, and turning it off disables them; if that would leave the
+sweep empty, the default engines are restored. It writes `webSearch.engines` and
+`webSearch.lightpandaFallback` to the settings file that already overrides them, or the global
+`~/.pi/agent/settings.json` when none does.
 
 | Key | Default | Description |
 |---|---|---|
@@ -354,10 +360,10 @@ them, or the global `~/.pi/agent/settings.json` when none does.
 | `unslothWebTools.allowPrivateAddresses` / `webFetch.allowPrivateAddresses` | `true` | Opt out to restore the resolved-IP SSRF guard: private/loopback/link-local hosts (localhost, LAN IPs) are refused again. Non-canonical numeric IP encodings stay blocked either way |
 | `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
 | `webFetch.transport` / `unslothWebTools.transport` | `tls-first` | Transport order for `web_fetch` and `web_search` engine requests: `tls-first` (default), `direct-first`, or `off` to disable the browser-fingerprint transport entirely |
-| `webSearch.engines` / `unslothWebTools.engines` | duckduckgo, startpage (yandex opt-in) | Restrict `web_search` to a subset of engine names, e.g. `["duckduckgo", "startpage", "yandex"]`; unknown names are ignored, and a list that matches nothing falls back to the default engines |
+| `webSearch.engines` / `unslothWebTools.engines` | duckduckgo, startpage (yandex and the render-only brave/yahoo opt-in) | Restrict `web_search` to a subset of engine names, e.g. `["duckduckgo", "startpage", "yandex"]`; `brave` and `yahoo` are dropped unless `webSearch.lightpandaFallback` is on; unknown names are ignored, and a list that matches nothing falls back to the default engines |
 | `webSearch.engineWeights` / `unslothWebTools.engineWeights` | all `1` | Per-engine fusion weight, e.g. `{"startpage": 2, "yandex": 0.5}`; only positive numbers are read |
 | `webSearch.maxPerHost` / `unslothWebTools.maxPerHost` | `0` (no cap) | Most results one registrable domain may contribute; `0` disables the cap |
-| `webSearch.lightpandaFallback` / `unslothWebTools.lightpandaFallback` | `false` | Render an engine page locally with Lightpanda when both network transports return nothing, then parse the dump; requires the local renderer and is off by default |
+| `webSearch.lightpandaFallback` / `unslothWebTools.lightpandaFallback` | `false` | Render an engine page locally with Lightpanda when both network transports return nothing, then parse the dump; required by the render-only `brave` and `yahoo` engines and off by default |
 | `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering for both tools (the `web_fetch` tier and the `web_search` fallback) |
 | `webRender.lightpandaPath` / `unslothWebTools.lightpandaPath` | launcher installed by `scripts/install-lightpanda.sh`, else `lightpanda` on `PATH` | Path to the Lightpanda binary used for local rendering |
 | `webRender.lightpandaCommand` / `unslothWebTools.lightpandaCommand` | none | Command prefix that launches the renderer, for WSL (`["wsl.exe","-e","<path>"]`) or containers; overrides `lightpandaPath`. The fetch flags are appended to it |
@@ -439,10 +445,11 @@ The suite ports Unsloth Studio's own tests for these tools:
 - `test/fetch-flow.test.ts`: GitHub README rewrite, deadline/cancellation, HTML sniffing
   (from `test_web_fetch_extraction.py`; the fetch client is injected via seams)
 - `test/engines.test.ts`: the ddgs engine port, normalizers, the XPath subset, the
-  reciprocal-rank aggregator, the per-host cap, and the Startpage engine with a stubbed fetch
+  reciprocal-rank aggregator, the per-host cap, the Startpage engine with a stubbed fetch, and the
+  render-only Brave/Yahoo sweep
 - `test/search-config.test.ts`: the default engine sweep (duckduckgo and startpage on, yandex
-  opt-in), the engine/render settings reader and writer, and the command overlay behind
-  `/search-config`
+  opt-in, brave/yahoo render-only), the engine/render settings reader and writer, and the command
+  overlay and auto-enable/disable invariants behind `/search-config`
 - `test/pdf-parity.test.ts`: MuPDF engine capabilities, PDF 1.5 object streams,
   ASCII85Decode, font `/Differences` encodings, pymupdf4llm-style headings/links/tables
 - `test/entities.test.ts`: `decodeHtmlEntities` parity with CPython `html.unescape`,

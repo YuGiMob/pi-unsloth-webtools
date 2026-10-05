@@ -11,12 +11,16 @@ const ENGINE_LABELS: Record<string, string> = {
   duckduckgo: "DuckDuckGo",
   startpage: "Startpage",
   yandex: "Yandex",
+  brave: "Brave",
+  yahoo: "Yahoo",
 };
 
 const ENGINE_HINTS: Record<string, string> = {
   duckduckgo: "On by default. DuckDuckGo's HTML results endpoint.",
   startpage: "On by default. Google-backed index served through Startpage.",
   yandex: "Opt-in. Yandex results are only searched while this stays on.",
+  brave: "Opt-in render-only. Brave's own index; swept only through the local Lightpanda renderer.",
+  yahoo: "Opt-in render-only. Yahoo results; swept only through the local Lightpanda renderer.",
 };
 
 const ENGINE_SETTING_PATHS = [
@@ -35,6 +39,39 @@ export interface SearchConfig {
   file: string;
 }
 
+export interface SearchConfigDraft {
+  engines: Set<string>;
+  lightpandaFallback: boolean;
+}
+
+const RENDER_ONLY_ENGINES = new Set(
+  TEXT_ENGINES.filter((engine) => engine.renderOnly === true).map((engine) => engine.name),
+);
+
+export function toggleSearchConfig(draft: SearchConfigDraft, id: string, value: string): boolean {
+  if (id === "reset") {
+    draft.engines = new Set(DEFAULT_ENGINE_NAMES);
+    draft.lightpandaFallback = false;
+    return true;
+  }
+  if (id === "lightpandaFallback") {
+    draft.lightpandaFallback = value === "on";
+    if (!draft.lightpandaFallback) {
+      for (const name of RENDER_ONLY_ENGINES) draft.engines.delete(name);
+      if (draft.engines.size === 0) draft.engines = new Set(DEFAULT_ENGINE_NAMES);
+    }
+    return true;
+  }
+  if (value === "on") {
+    draft.engines.add(id);
+    if (RENDER_ONLY_ENGINES.has(id)) draft.lightpandaFallback = true;
+    return true;
+  }
+  if (draft.engines.size === 1 && draft.engines.has(id)) return false;
+  draft.engines.delete(id);
+  return true;
+}
+
 function knownEngineNames(): Set<string> {
   return new Set(TEXT_ENGINES.map((engine) => engine.name));
 }
@@ -45,8 +82,10 @@ export async function readSearchConfig(cwd?: string): Promise<SearchConfig> {
   const listed = (engines ?? [])
     .map((name) => name.trim().toLowerCase())
     .filter((name) => known.has(name));
-  const names = listed.length ? [...new Set(listed)] : [...DEFAULT_ENGINE_NAMES];
   const fallback = lightpandaFallback === true;
+  let names = listed.length ? [...new Set(listed)] : [...DEFAULT_ENGINE_NAMES];
+  if (!fallback) names = names.filter((name) => !RENDER_ONLY_ENGINES.has(name));
+  if (!names.length) names = [...DEFAULT_ENGINE_NAMES];
   if (sourceFile) return { engines: names, lightpandaFallback: fallback, file: sourceFile };
   const base = agentDir();
   if (!base) throw new Error("could not resolve the pi agent directory");
@@ -159,12 +198,14 @@ export async function openSearchConfig(ctx: ExtensionCommandContext): Promise<vo
   }
   await ctx.ui.custom<void>(
     (tui, theme, _keybindings, done) => {
-      let engines = new Set(config.engines);
-      let lightpandaFallback = config.lightpandaFallback;
+      const draft: SearchConfigDraft = {
+        engines: new Set(config.engines),
+        lightpandaFallback: config.lightpandaFallback,
+      };
       let list: SettingsList;
       const status = new Text("", 1, 0);
       const persist = () => {
-        void saveSearchConfig(config.file, { engines: [...engines], lightpandaFallback })
+        void saveSearchConfig(config.file, { engines: [...draft.engines], lightpandaFallback: draft.lightpandaFallback })
           .then(
             () => status.setText(theme.fg("dim", `Saved to ${config.file}`)),
             (error: unknown) =>
@@ -176,17 +217,17 @@ export async function openSearchConfig(ctx: ExtensionCommandContext): Promise<vo
         ...engineOrder().map((name) => ({
           id: name,
           label: ENGINE_LABELS[name] ?? name,
-          currentValue: engines.has(name) ? "on" : "off",
+          currentValue: draft.engines.has(name) ? "on" : "off",
           values: ["on", "off"],
           description: ENGINE_HINTS[name] ?? "",
         })),
         {
           id: "lightpandaFallback",
           label: "Lightpanda fallback",
-          currentValue: lightpandaFallback ? "on" : "off",
+          currentValue: draft.lightpandaFallback ? "on" : "off",
           values: ["on", "off"],
           description:
-            "Render an engine page locally with Lightpanda when the network transports return no results (off by default).",
+            "Render an engine page locally with Lightpanda when the network transports return no results; required by Brave and Yahoo.",
         },
         {
           id: "reset",
@@ -196,31 +237,20 @@ export async function openSearchConfig(ctx: ExtensionCommandContext): Promise<vo
           description: `Enable ${DEFAULT_ENGINE_NAMES.join(" and ")}; Lightpanda fallback off.`,
         },
       ];
+      const syncRows = () => {
+        for (const item of items) {
+          if (item.id === "reset") continue;
+          if (item.id === "lightpandaFallback") list.updateValue(item.id, draft.lightpandaFallback ? "on" : "off");
+          else list.updateValue(item.id, draft.engines.has(item.id) ? "on" : "off");
+        }
+      };
       const onChange = (id: string, value: string) => {
-        if (id === "reset") {
-          engines = new Set(DEFAULT_ENGINE_NAMES);
-          lightpandaFallback = false;
-          for (const item of items) {
-            if (item.id === "lightpandaFallback") list.updateValue(item.id, "off");
-            else if (item.id !== "reset") list.updateValue(item.id, engines.has(item.id) ? "on" : "off");
-          }
-          persist();
-          return;
-        }
-        if (id === "lightpandaFallback") {
-          lightpandaFallback = value === "on";
-          persist();
-          return;
-        }
-        const next = new Set(engines);
-        if (value === "on") next.add(id);
-        else next.delete(id);
-        if (!next.size) {
+        if (!toggleSearchConfig(draft, id, value)) {
           list.updateValue(id, "on");
           tui.requestRender();
           return;
         }
-        engines = next;
+        syncRows();
         persist();
       };
       list = new SettingsList(items, items.length, settingsTheme(theme), onChange, () => done());

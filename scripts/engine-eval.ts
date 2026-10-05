@@ -60,7 +60,7 @@ interface EngineRun {
   error: string;
 }
 
-const engineNames = TEXT_ENGINES.map((engine) => engine.name);
+const engineNames = TEXT_ENGINES.filter((engine) => engine.renderOnly !== true).map((engine) => engine.name);
 const goldenByQuery = new Map(GOLDEN_QUERIES.map((golden) => [golden.query, golden]));
 const ctx = { region: "us-en", safesearch: "moderate", transport: TRANSPORT };
 
