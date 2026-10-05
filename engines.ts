@@ -786,6 +786,8 @@ const START_PAGE: Engine = {
 
 export const TEXT_ENGINES: Engine[] = [DUCKDUCKGO, YANDEX, START_PAGE];
 
+export const DEFAULT_ENGINE_NAMES = ["duckduckgo", "startpage"] as const;
+
 export class ResultsAggregator {
   private cache = new Map<string, SearchResult>();
   private scores = new Map<string, number>();
@@ -897,11 +899,15 @@ async function recordSweepStats(query: string, maxResults: number, started: numb
   } catch {}
 }
 
+function defaultEngines(): Engine[] {
+  const wanted = new Set<string>(DEFAULT_ENGINE_NAMES);
+  return TEXT_ENGINES.filter((engine) => wanted.has(engine.name));
+}
+
 function selectedEngines(names: string[] | undefined): Engine[] {
-  if (!names?.length) return TEXT_ENGINES;
-  const wanted = new Set(names.map((name) => name.trim().toLowerCase()));
+  const wanted = new Set((names?.length ? names : DEFAULT_ENGINE_NAMES).map((name) => name.trim().toLowerCase()));
   const chosen = TEXT_ENGINES.filter((engine) => wanted.has(engine.name));
-  return chosen.length ? chosen : TEXT_ENGINES;
+  return chosen.length ? chosen : defaultEngines();
 }
 
 function shuffledEngines(engines: Engine[] = TEXT_ENGINES): Engine[] {

@@ -39,7 +39,7 @@ Both tools display their target in the TUI tool row: `web_search "query"` and `w
 Mirrors Unsloth Studio's `web_search` tool:
 
 - Searches like Studio's pinned `ddgs==9.14.4` `DDGS.text()`: the Studio engines that still work
-  here (duckduckgo, yandex; the others are behind bot walls, see
+  here (duckduckgo; yandex is opt-in; the others are behind bot walls, see
   [Known differences from Studio](#known-differences-from-studio)) plus startpage,
   the same provider deduplication, and an href-dedupe aggregator (hrefs are
   canonicalized first — `utm_*`/tracking parameters and fragments are dropped and the URL is
@@ -229,7 +229,8 @@ third-party rendering service.
 - Search engines: the sweep speaks a browser's TLS/HTTP2 shape through `wreq-js` first (the same
   transport `web_fetch` uses), so engine fingerprints match Chrome rather than Node's `fetch`;
   the plain Node transport is the fallback. User agents on that fallback are a fixed browser set,
-  not `fake_useragent`'s database.
+  not `fake_useragent`'s database. DuckDuckGo and Startpage are on by default; Yandex stays
+  opt-in (turn it on with `webSearch.engines` or `/search-engines`).
 - Startpage: an extra engine beyond Studio's set, matching newer ddgs (its Google-backed index
   means it fills the `google` provider slot). It answers a plain `GET /sp/search?query=` and
   serves an Anubis proof-of-work challenge to clients that do not look like a browser, so it works
@@ -241,8 +242,9 @@ third-party rendering service.
   google and brave answer rate limits and bot interstitials instead of results (HTTP 429 in
   testing), and wikipedia is an API for a source the other engines already return — so the sweep
   no longer spends a slot on it, and `wikipedia.org` results are ranked like any other instead of
-  being forced to the top. The remaining three engines can be narrowed further per machine with
-  `webSearch.engines` (see Configuration).
+  being forced to the top. DuckDuckGo and Startpage run by default and Yandex is opt-in; the sweep
+  can be narrowed further per machine with `webSearch.engines` or the `/search-engines` command
+  (see Configuration).
 - Ranking: Studio's `SimpleFilterRanker` (keyword buckets with `wikipedia.org` pinned first) is
   replaced by weighted reciprocal-rank fusion over each engine's own ordering. On the
   `npm run engine:eval` query set that lifts mean precision@5 from 0.28 (keyword buckets) to 0.35 —
@@ -330,6 +332,9 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 }
 ```
 
+Run `/search-engines` in the TUI to toggle the sweep. It writes `webSearch.engines` to the settings
+file that already overrides the list, or the global `~/.pi/agent/settings.json` when none does.
+
 | Key | Default | Description |
 |---|---|---|
 | `unslothWebTools.maxResults` | `5` | Default `maxResults` for `web_search` (clamped 1-20) |
@@ -340,7 +345,7 @@ Optional settings in `~/.pi/agent/settings.json` or `.pi/settings.json` (project
 | `unslothWebTools.allowPrivateAddresses` / `webFetch.allowPrivateAddresses` | `true` | Opt out to restore the resolved-IP SSRF guard: private/loopback/link-local hosts (localhost, LAN IPs) are refused again. Non-canonical numeric IP encodings stay blocked either way |
 | `unslothWebTools.allowLocalFiles` / `webFetch.allowLocalFiles` | `true` | Opt out to refuse local files in `web_fetch` (`file://` URLs, absolute, `~/`, or `./` paths); when enabled, PDFs are extracted and HTML converted |
 | `webFetch.transport` / `unslothWebTools.transport` | `tls-first` | Transport order for `web_fetch` and `web_search` engine requests: `tls-first` (default), `direct-first`, or `off` to disable the browser-fingerprint transport entirely |
-| `webSearch.engines` / `unslothWebTools.engines` | all three (duckduckgo, yandex, startpage) | Restrict `web_search` to a subset of engine names, e.g. `["duckduckgo", "yandex"]`; unknown names are ignored, and a list that matches nothing falls back to every engine |
+| `webSearch.engines` / `unslothWebTools.engines` | duckduckgo, startpage (yandex opt-in) | Restrict `web_search` to a subset of engine names, e.g. `["duckduckgo", "startpage", "yandex"]`; unknown names are ignored, and a list that matches nothing falls back to the default engines |
 | `webSearch.engineWeights` / `unslothWebTools.engineWeights` | all `1` | Per-engine fusion weight, e.g. `{"startpage": 2, "yandex": 0.5}`; only positive numbers are read |
 | `webSearch.maxPerHost` / `unslothWebTools.maxPerHost` | `0` (no cap) | Most results one registrable domain may contribute; `0` disables the cap |
 | `webRender.lightpandaEnabled` / `unslothWebTools.lightpandaEnabled` | `true` | Opt out to disable local Lightpanda rendering |
@@ -425,6 +430,8 @@ The suite ports Unsloth Studio's own tests for these tools:
   (from `test_web_fetch_extraction.py`; the fetch client is injected via seams)
 - `test/engines.test.ts`: the ddgs engine port, normalizers, the XPath subset, the
   reciprocal-rank aggregator, the per-host cap, and the Startpage engine with a stubbed fetch
+- `test/engine-config.test.ts`: the default engine sweep (duckduckgo and startpage on, yandex
+  opt-in) and the engine settings reader/writer behind `/search-engines`
 - `test/pdf-parity.test.ts`: MuPDF engine capabilities, PDF 1.5 object streams,
   ASCII85Decode, font `/Differences` encodings, pymupdf4llm-style headings/links/tables
 - `test/entities.test.ts`: `decodeHtmlEntities` parity with CPython `html.unescape`,

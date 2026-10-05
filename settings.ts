@@ -198,13 +198,26 @@ export async function loadDefaultMaxResults(cwd?: string): Promise<number> {
   return result;
 }
 
-export async function loadDefaultEngines(cwd?: string): Promise<string[] | undefined> {
-  let result: string[] | undefined;
-  for (const data of await settingsEntries(cwd)) {
+export async function loadEngineSettings(cwd?: string): Promise<{
+  engines: string[] | undefined;
+  sourceFile: string | null;
+}> {
+  let engines: string[] | undefined;
+  let sourceFile: string | null = null;
+  for (const file of settingsFiles(cwd)) {
+    const data = await readJson(file);
+    if (!data) continue;
     const candidate = pickStringArray(data, ENGINE_PATHS);
-    if (candidate !== undefined) result = candidate;
+    if (candidate !== undefined) {
+      engines = candidate;
+      sourceFile = file;
+    }
   }
-  return result;
+  return { engines, sourceFile };
+}
+
+export async function loadDefaultEngines(cwd?: string): Promise<string[] | undefined> {
+  return (await loadEngineSettings(cwd)).engines;
 }
 
 export async function loadDefaultEngineWeights(cwd?: string): Promise<Record<string, number> | undefined> {

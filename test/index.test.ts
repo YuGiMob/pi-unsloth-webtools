@@ -35,10 +35,10 @@ function makeHarness(): { tools: string[]; commands: string[]; handlers: string[
 }
 
 describe("extension registration", () => {
-  it("registers the web tools and nothing else", () => {
+  it("registers the web tools and the search engines command", () => {
     const harness = makeHarness();
     expect(harness.tools).toEqual(["web_search", "web_fetch"]);
-    expect(harness.commands).toEqual([]);
+    expect(harness.commands).toEqual(["search-engines"]);
     expect(harness.handlers).toEqual([]);
   });
 });

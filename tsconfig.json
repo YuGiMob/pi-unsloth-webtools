@@ -32,6 +32,7 @@
     "cache.ts",
     "settings.ts",
     "agent-dir.ts",
+    "engine-config.ts",
     "test/**/*.ts",
     "scripts/**/*.ts"
   ]

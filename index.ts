@@ -1,6 +1,7 @@
 import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { openEngineConfig } from "./engine-config.ts";
 import { collapseWhitespace, visibleChars } from "./html-to-md.ts";
 import { SEARCH_TIMEOUT_MS, webSearch as defaultWebSearch } from "./web-search.ts";
 import {
@@ -255,4 +256,10 @@ export default function (pi: ExtensionAPI) {
   const { webSearchTool, webFetchTool } = createWebTools();
   pi.registerTool(webSearchTool);
   pi.registerTool(webFetchTool);
+  pi.registerCommand("search-engines", {
+    description: "Toggle which engines web_search queries (duckduckgo and startpage by default; yandex opt-in)",
+    handler: async (_args, ctx) => {
+      await openEngineConfig(ctx);
+    },
+  });
 }

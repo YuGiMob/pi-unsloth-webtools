@@ -418,7 +418,9 @@ describe("sweep early exit", () => {
       }),
     );
     const start = performance.now();
-    const results = await autoTextSearch("cat", 5, 10_000);
+    const results = await autoTextSearch("cat", 5, 10_000, undefined, {
+      engines: ["duckduckgo", "startpage", "yandex"],
+    });
     expect(results.length).toBe(5);
     expect(performance.now() - start).toBeLessThan(3_000);
     expect(aborted).toBe(true);
@@ -472,7 +474,7 @@ describe("engine retry", () => {
       }),
     );
     await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(SearchTimeoutError);
-    expect(calls).toBe(3);
+    expect(calls).toBe(2);
   });
 
   it("does not classify a retry that cannot start as a timeout", async () => {
@@ -496,7 +498,7 @@ describe("engine retry", () => {
       }),
     );
     await expect(autoTextSearch("cat", 5, 400)).rejects.toThrow(EmptySweepError);
-    expect(calls).toBe(3);
+    expect(calls).toBe(2);
   });
 });
 
@@ -539,17 +541,32 @@ describe("engine selection", () => {
     expect(calls[0]).toContain("html.duckduckgo.com");
   });
 
-  it("falls back to every engine when no configured name matches", async () => {
+  it("searches duckduckgo and startpage by default", async () => {
     const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         calls.push(String(url));
-        return new Response("", { status: 200 });
+        return new Response("<html><body></body></html>", { status: 200 });
+      }),
+    );
+    await expect(autoTextSearch("cat", 5, 10_000)).rejects.toThrow(EmptySweepError);
+    expect(calls.length).toBe(2);
+    expect(calls.some((url) => url.includes("yandex"))).toBe(false);
+  });
+
+  it("falls back to the default engines when no configured name matches", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(String(url));
+        return new Response("<html><body></body></html>", { status: 200 });
       }),
     );
     await expect(autoTextSearch("cat", 5, 10_000, undefined, { engines: ["nope"] })).rejects.toThrow(EmptySweepError);
-    expect(calls.length).toBeGreaterThan(1);
+    expect(calls.length).toBe(2);
+    expect(calls.some((url) => url.includes("yandex"))).toBe(false);
   });
 
   it("applies maxPerHost to the returned results", async () => {

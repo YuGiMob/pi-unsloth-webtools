@@ -351,7 +351,7 @@ describe("search engine settings", () => {
     else process.env.PI_CODING_AGENT_DIR = previousEnv;
   });
 
-  it("defaults to every engine and reads a project override", async () => {
+  it("defaults to an unset engine list and reads a project override", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-unsloth-engines-"));
     try {
       process.env.PI_CODING_AGENT_DIR = join(root, "agent");
